@@ -138,7 +138,7 @@ function NewProject() {
         ))}
       </div>
       <div className="space-y-4">
-        <Field label="Nom" hint="Servi sur nom.tondomaine.fr"><input className={inp} required placeholder="mon-site" value={f.name} onChange={set('name')} /></Field>
+        <Field label="Nom"><input className={inp} required placeholder="mon-site" value={f.name} onChange={set('name')} /></Field>
         {src === 'github' ? (
           <div className="grid grid-cols-[1fr_8rem] gap-3">
             <Field label="Repo"><input className={inp} required placeholder="Wallacecleaver/mon-repo" value={f.repo} onChange={set('repo')} /></Field>
@@ -149,7 +149,7 @@ function NewProject() {
         )}
         <div className="grid grid-cols-[8rem_1fr] gap-3">
           <Field label="Port interne"><input className={inp} type="number" value={f.port} onChange={set('port')} /></Field>
-          <Field label="Domaine perso (optionnel)"><input className={inp} placeholder="app.mondomaine.fr" value={f.domain} onChange={set('domain')} /></Field>
+          <Field label="Domaine (optionnel)"><input className={inp} placeholder="mon-site.mondomaine.fr" value={f.domain} onChange={set('domain')} /></Field>
         </div>
         <Field label="Variables d’environnement" hint="Une par ligne : CLE=valeur"><textarea className={cx(inp, 'h-28 font-mono text-xs')} value={f.env} onChange={set('env')} /></Field>
       </div>
@@ -179,7 +179,9 @@ function ProjectPage({ id }) {
           <h1 className="font-display text-4xl font-bold">{p.name}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-4">
             <Badge s={p.status} />
-            <a href={p.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-sm text-accent-blue hover:underline">{p.url.replace(/^https?:\/\//, '')} <ExternalLink size={13} /></a>
+            {p.domain
+              ? <a href={p.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-sm text-accent-blue hover:underline">{p.domain} <ExternalLink size={13} /></a>
+              : <span className="text-sm text-zinc-500">localhost:{p.hostport}</span>}
           </div>
         </div>
         <div className="flex gap-2">
@@ -227,8 +229,11 @@ function ProjectPage({ id }) {
             <Field label="Port interne"><input className={inp} type="number" value={cfg.port} onChange={e => setCfg({ ...cfg, port: e.target.value })} /></Field>
             {p.source === 'github' && <Field label="Branche"><input className={inp} value={cfg.branch} onChange={e => setCfg({ ...cfg, branch: e.target.value })} /></Field>}
           </div>
-          <Field label="Domaine perso"><input className={inp} placeholder="app.mondomaine.fr" value={cfg.domain} onChange={e => setCfg({ ...cfg, domain: e.target.value })} /></Field>
+          <Field label="Domaine"><input className={inp} placeholder="mon-site.mondomaine.fr" value={cfg.domain} onChange={e => setCfg({ ...cfg, domain: e.target.value })} /></Field>
           <button className={btn} onClick={() => save(true).then(() => setTab('deploys'))}>Appliquer & redéployer</button>
+          <Field label="À ajouter dans ton Caddyfile" hint="Puis : sudo systemctl reload caddy">
+            <pre onClick={e => navigator.clipboard?.writeText(e.currentTarget.textContent)} title="Cliquer pour copier" className="cursor-pointer rounded-xl border border-zinc-800 bg-black/60 p-4 font-mono text-xs leading-relaxed text-zinc-300">{`${cfg.domain || 'mon-site.mondomaine.fr'} {\n    reverse_proxy localhost:${p.hostport}\n}`}</pre>
+          </Field>
           {p.source === 'github' && (
             <Field label="Webhook GitHub (push → redéploiement)" hint="Repo → Settings → Webhooks → content type application/json">
               <input readOnly className={cx(inp, 'font-mono text-xs')} value={hook} onFocus={e => e.target.select()} />

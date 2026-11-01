@@ -1,43 +1,12 @@
 services:
-  traefik:
-    image: traefik:v3.6
-    restart: unless-stopped
-    command:
-      - --providers.docker=true
-      - --providers.docker.exposedbydefault=false
-      - --providers.docker.network=shipyard
-      - --entrypoints.web.address=:80
-      - --entrypoints.web.http.redirections.entrypoint.to=websecure
-      - --entrypoints.web.http.redirections.entrypoint.scheme=https
-      - --entrypoints.websecure.address=:443
-      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
-      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
-      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
-    ports: ["80:80", "443:443"]
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./letsencrypt:/letsencrypt
-    networks: [shipyard]
-
   panel:
     build: .
     restart: unless-stopped
     env_file: .env
     environment:
       DATA_DIR: /data
+    ports:
+      - "127.0.0.1:3000:3000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data:/data
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.panel.rule=Host(`panel.${BASE_DOMAIN}`)
-      - traefik.http.routers.panel.entrypoints=websecure
-      - traefik.http.routers.panel.tls.certresolver=le
-      - traefik.http.routers.panel.middlewares=gz
-      - traefik.http.middlewares.gz.compress=true
-      - traefik.http.services.panel.loadbalancer.server.port=3000
-    networks: [shipyard]
-
-networks:
-  shipyard:
-    name: shipyard

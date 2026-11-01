@@ -8,9 +8,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const E = process.env
-const BASE = E.BASE_DOMAIN || 'localhost'
+const BIND = E.BIND_HOST || '127.0.0.1'
+const PORT_START = +E.APP_PORT_START || 4000
 const DATA = E.DATA_DIR || './data'
-const NET = E.DOCKER_NETWORK || 'shipyard'
 const TOKEN = E.GITHUB_TOKEN || ''
 const PASS = E.ADMIN_PASSWORD
 const SECRET = E.SESSION_SECRET || randomBytes(32).toString('hex')
@@ -21,7 +21,7 @@ await mkdir(DATA, { recursive: true })
 const db = new DatabaseSync(path.join(DATA, 'db.sqlite'))
 db.exec(`
 pragma journal_mode=wal;
-create table if not exists projects(id text primary key,name text,source text,repo text,branch text,image text,port int,domain text,env text default '{}',hook text,created int);
+create table if not exists projects(id text primary key,name text,source text,repo text,branch text,image text,port int,domain text,env text default '{}',hook text,created int,hostport int);
 create table if not exists deploys(id integer primary key autoincrement,project text,status text,log text default '',created int,finished int);
 `)
 
@@ -50,7 +50,7 @@ const out = (cmd, args) => new Promise(ok => {
 const lines = s => s.split('\n').filter(Boolean)
 const row = r => r && { ...r, env: JSON.parse(r.env) }
 const getP = id => row(db.prepare('select * from projects where id=?').get(id)) || bad('Projet introuvable', 404)
-const urlOf = p => `${BASE === 'localhost' ? 'http' : 'https'}://${p.domain || `${p.id}.${BASE}`}`
+const urlOf = p => p.domain ? `https://${p.domain}` : `http://localhost:${p.hostport}`
 const ctrs = async id => lines(await out('docker', ['ps', '-a', '--filter', `label=shipyard.project=${id}`, '--format', '{{.Names}}']))
 
 // ---------- validation ----------
@@ -97,7 +97,7 @@ async function deploy(p) {
     buf.text += s; for (const r of buf.subs) r.write(ev(s))
   }
   const name = `sy-${p.id}-${id}`
-  let status = 'failed'
+  let status = 'failed', old = []
   try {
     let image = p.image
     if (p.source === 'github') {
@@ -120,26 +120,17 @@ async function deploy(p) {
       await run('docker', ['pull', image], { onData: log })
     }
 
-    const hosts = [`${p.id}.${BASE}`, ...(p.domain ? [p.domain] : [])]
-    const t = `traefik.http.routers.${p.id}`
-    const labels = {
-      'shipyard.project': p.id, 'traefik.enable': 'true', 'traefik.docker.network': NET,
-      [`${t}.rule`]: hosts.map(h => `Host(\`${h}\`)`).join(' || '),
-      [`${t}.entrypoints`]: 'websecure', [`${t}.tls.certresolver`]: 'le',
-      [`traefik.http.services.${p.id}.loadbalancer.server.port`]: String(p.port),
-    }
-    const args = ['run', '-d', '--name', name, '--network', NET, '--restart', 'unless-stopped', '--memory', E.APP_MEMORY || '512m', '-e', `PORT=${p.port}`]
+    old = await ctrs(p.id)
+    if (old.length) { log('→ Arrêt de l’ancienne version\n'); await out('docker', ['stop', ...old]) }
+    const args = ['run', '-d', '--name', name, '--restart', 'unless-stopped', '--memory', E.APP_MEMORY || '512m',
+      '-l', `shipyard.project=${p.id}`, '-p', `${BIND}:${p.hostport}:${p.port}`, '-e', `PORT=${p.port}`]
     for (const [k, v] of Object.entries(p.env)) args.push('-e', `${k}=${v}`)
-    for (const [k, v] of Object.entries(labels)) args.push('-l', `${k}=${v}`)
-    log('→ Démarrage du conteneur\n')
+    log(`→ Démarrage du conteneur (port ${p.hostport})\n`)
     await run('docker', [...args, image], { onData: log })
 
     await new Promise(r => setTimeout(r, 5000))
     if (await out('docker', ['inspect', '-f', '{{.State.Running}}', name]) !== 'true')
       throw new Error('Le conteneur a planté au démarrage :\n' + await out('docker', ['logs', '--tail', '40', name]))
-
-    // bascule sans coupure : l'ancien conteneur n'est retiré qu'une fois le nouveau OK
-    const old = (await ctrs(p.id)).filter(n => n !== name)
     if (old.length) await out('docker', ['rm', '-f', ...old])
     for (const tag of lines(await out('docker', ['images', `shipyard/${p.id}`, '--format', '{{.Tag}}'])))
       if (tag !== String(id)) await out('docker', ['rmi', `shipyard/${p.id}:${tag}`])
@@ -147,6 +138,7 @@ async function deploy(p) {
     status = 'success'
   } catch (e) {
     log(`\n✗ ${e.message}\n`); await out('docker', ['rm', '-f', name])
+    if (old.length) { log('→ Retour à l’ancienne version\n'); await out('docker', ['start', old[0]]) }
   }
   db.prepare('update deploys set status=?,log=?,finished=? where id=?').run(status, buf.text, Date.now(), id)
   for (const r of buf.subs) { r.write(`event: end\ndata: "${status}"\n\n`); r.end() }
@@ -184,11 +176,12 @@ route('GET', '/api/projects', async () => {
 route('POST', '/api/projects', ({ body }) => {
   const name = String(body.name || '').trim()
   const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 38)
-  if (!SLUG.test(id) || ['panel', 'api', 'traefik'].includes(id)) bad('Nom invalide ou réservé')
+  if (!SLUG.test(id) || ['api'].includes(id)) bad('Nom invalide ou réservé')
   if (db.prepare('select 1 from projects where id=?').get(id)) bad('Ce nom existe déjà', 409)
   const o = check({ ...body })
-  db.prepare('insert into projects(id,name,source,repo,branch,image,port,domain,env,hook,created) values(?,?,?,?,?,?,?,?,?,?,?)')
-    .run(id, name, o.source, o.repo || '', o.branch || '', o.image || '', o.port, o.domain, JSON.stringify(o.env), randomBytes(16).toString('hex'), Date.now())
+  const hostport = (db.prepare('select max(hostport) m from projects').get().m || PORT_START - 1) + 1
+  db.prepare('insert into projects(id,name,source,repo,branch,image,port,domain,env,hook,created,hostport) values(?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run(id, name, o.source, o.repo || '', o.branch || '', o.image || '', o.port, o.domain, JSON.stringify(o.env), randomBytes(16).toString('hex'), Date.now(), hostport)
   start(getP(id)); return { id }
 })
 
