@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+@font-face { font-family: 'Poppins'; src: url('/fonts/Poppins-Regular.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+@font-face { font-family: 'Poppins'; src: url('/fonts/Poppins-Medium.woff2') format('woff2'); font-weight: 500; font-display: swap; }
+@font-face { font-family: 'Poppins'; src: url('/fonts/Poppins-SemiBold.woff2') format('woff2'); font-weight: 600; font-display: swap; }
+@font-face { font-family: 'Clash Display'; src: url('/fonts/ClashDisplay-SemiBold.woff2') format('woff2'); font-weight: 600; font-display: swap; }
+@font-face { font-family: 'Clash Display'; src: url('/fonts/ClashDisplay-Bold.woff2') format('woff2'); font-weight: 700; font-display: swap; }
+
+@theme {
+  --font-sans: 'Poppins', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Clash Display', 'Poppins', ui-sans-serif, system-ui, sans-serif;
+  --color-accent-blue: #2e9bfb;
+  --color-accent-purple: #CE42FF;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
+::selection { background: rgba(46, 155, 251, 0.3); }
+
+.gradient-text { background: linear-gradient(135deg, #2e9bfb, #CE42FF); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.bg-brand { background: linear-gradient(135deg, #2e9bfb, #CE42FF); }
+.orb { position: fixed; border-radius: 50%; filter: blur(80px); pointer-events: none; z-index: -1; }
+.dot-grid { background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px); background-size: 24px 24px; }
+.pulse-dot { animation: pulse-dot 1.4s ease-in-out infinite; }
+@keyframes pulse-dot { 50% { opacity: 0.35; } }
+.fade-up { animation: fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes fade-up { from { opacity: 0; transform: translateY(14px); } }
+@media (prefers-reduced-motion: reduce) { .fade-up, .pulse-dot { animation: none; } }
