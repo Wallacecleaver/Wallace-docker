@@ -1,6 +1,7 @@
 import http from 'node:http'
 import { DatabaseSync } from 'node:sqlite'
 import { spawn } from 'node:child_process'
+import dns from 'node:dns/promises'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createReadStream, existsSync, statSync } from 'node:fs'
@@ -11,7 +12,9 @@ const E = process.env
 const BIND = E.BIND_HOST || '127.0.0.1'
 const PORT_START = +E.APP_PORT_START || 4000
 const DATA = E.DATA_DIR || './data'
-const TOKEN = E.GITHUB_TOKEN || ''
+const ENV_TOKEN = E.GITHUB_TOKEN || ''
+const CLIENT_ID = E.GITHUB_CLIENT_ID || ''
+const SUFFIX = E.DOMAIN_SUFFIX ?? 'duckdns.org'
 const PASS = E.ADMIN_PASSWORD
 const CADDYFILE = E.CADDYFILE || ''
 const CADDY_CTR = E.CADDY_CONTAINER || 'caddy'
@@ -27,6 +30,10 @@ pragma journal_mode=wal;
 create table if not exists projects(id text primary key,name text,source text,repo text,branch text,image text,port int,domain text,env text default '{}',hook text,created int,hostport int);
 create table if not exists deploys(id integer primary key autoincrement,project text,status text,log text default '',created int,finished int);
 `)
+db.exec('create table if not exists settings(k text primary key, v text)')
+const setting = k => db.prepare('select v from settings where k=?').get(k)?.v
+const setSetting = (k, v) => v == null ? db.prepare('delete from settings where k=?').run(k) : db.prepare('insert into settings(k,v) values(?,?) on conflict(k) do update set v=excluded.v').run(k, v)
+const ghToken = () => setting('gh_token') || ENV_TOKEN
 
 // ---------- helpers ----------
 const bad = (m, status = 400) => { throw Object.assign(new Error(m), { status }) }
@@ -87,9 +94,9 @@ const syncCaddy = () => caddy.enabled ? (caddyQueue = caddyQueue.then(doSyncCadd
 async function doSyncCaddy() {
   try {
     const blocks = []
-    if (PANEL_DOMAIN) blocks.push(`${PANEL_DOMAIN} {\n    reverse_proxy localhost:${+E.PORT || 3000}\n}`)
-    for (const r of db.prepare("select domain,hostport from projects where domain != '' order by created").all())
-      blocks.push(`${r.domain} {\n    reverse_proxy localhost:${r.hostport}\n}`)
+    if (PANEL_DOMAIN) blocks.push(`# panel\n${PANEL_DOMAIN} {\n    reverse_proxy localhost:${+E.PORT || 3000}\n}`)
+    for (const r of db.prepare("select id,domain,hostport from projects where domain != '' order by created").all())
+      blocks.push(`# ${r.id}\n${r.domain} {\n    reverse_proxy localhost:${r.hostport}\n}`)
     const section = `${BEGIN}\n${blocks.join('\n\n')}${blocks.length ? '\n' : ''}${END}`
     const cur = existsSync(CADDYFILE) ? await readFile(CADDYFILE, 'utf8') : ''
     const a = cur.indexOf(BEGIN), b = cur.indexOf(END)
@@ -133,6 +140,7 @@ function start(p) {
 }
 
 async function deploy(p) {
+  const TOKEN = ghToken()
   const id = Number(db.prepare('insert into deploys(project,status,created) values(?,?,?)').run(p.id, 'building', Date.now()).lastInsertRowid)
   const buf = { text: '', subs: new Set() }; logs.set(id, buf)
   const log = s => {
@@ -204,7 +212,68 @@ route('POST', '/api/login', ({ req, res, body }) => {
 route('POST', '/api/logout', ({ res }) => { res.setHeader('set-cookie', 'sy=; HttpOnly; Path=/; Max-Age=0') })
 route('GET', '/api/me', () => ({ ok: true }))
 route('GET', '/api/caddy', () => caddy)
-route('GET', '/api/config', () => ({ base: PANEL_DOMAIN, caddy: caddy.enabled }))
+let pubIp = E.PUBLIC_IP || ''
+const publicIp = async () => {
+  if (!pubIp) try { pubIp = (await (await fetch('https://api4.ipify.org')).text()).trim() } catch {}
+  return pubIp
+}
+route('GET', '/api/config', async () => ({ base: PANEL_DOMAIN, suffix: SUFFIX, caddy: caddy.enabled, ip: await publicIp() }))
+route('GET', '/api/dns', async ({ req }) => {
+  const d = (new URL(req.url, 'http://x').searchParams.get('domain') || '').toLowerCase()
+  if (!DOM.test(d)) bad('Adresse invalide')
+  const ip = await publicIp(); let ips = []
+  try { ips = await dns.resolve4(d) } catch {}
+  return { ip, ips, ok: !!ip && ips.includes(ip) }
+})
+
+// ---------- GitHub ----------
+const gh = async (path, token = ghToken()) => {
+  const r = await fetch(`https://api.github.com${path}`, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'wdock', ...(token ? { authorization: `Bearer ${token}` } : {}) } })
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok) bad(j.message || `GitHub a répondu ${r.status}`, r.status === 401 ? 400 : 502)
+  return j
+}
+const ghPost = async (url, data) => {
+  const r = await fetch(url, { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'wdock' }, body: JSON.stringify(data) })
+  return r.json().catch(() => ({}))
+}
+let device = null
+route('GET', '/api/github', async () => {
+  const t = ghToken(), base = { connected: false, deviceFlow: !!CLIENT_ID }
+  if (!t) return base
+  try { const u = await gh('/user', t); return { ...base, connected: true, login: u.login } }
+  catch (e) { return { ...base, error: e.message } }
+})
+route('POST', '/api/github/device', async () => {
+  if (!CLIENT_ID) bad('GITHUB_CLIENT_ID manquant dans le .env')
+  const j = await ghPost('https://github.com/login/device/code', { client_id: CLIENT_ID, scope: 'repo' })
+  if (!j.device_code) bad(j.error_description || 'Impossible de démarrer la connexion GitHub', 502)
+  device = { code: j.device_code, until: Date.now() + j.expires_in * 1000 }
+  return { user_code: j.user_code, url: j.verification_uri, interval: j.interval || 5 }
+})
+route('POST', '/api/github/poll', async () => {
+  if (!device || Date.now() > device.until) bad('Connexion expirée, recommence')
+  const j = await ghPost('https://github.com/login/oauth/access_token', { client_id: CLIENT_ID, device_code: device.code, grant_type: 'urn:ietf:params:oauth:grant-type:device_code' })
+  if (j.access_token) { setSetting('gh_token', j.access_token); device = null; return { status: 'ok' } }
+  if (j.error === 'authorization_pending' || j.error === 'slow_down') return { status: 'pending' }
+  device = null; bad(j.error_description || 'Connexion refusée')
+})
+route('POST', '/api/github/token', async ({ body }) => {
+  const t = String(body.token || '').trim()
+  if (!/^[\w-]{20,255}$/.test(t)) bad('Token invalide')
+  await gh('/user', t); setSetting('gh_token', t)
+})
+route('DELETE', '/api/github', () => { setSetting('gh_token', null) })
+route('GET', '/api/github/repos', async () => {
+  const t = ghToken(); if (!t) bad('GitHub non connecté')
+  const all = []
+  for (let page = 1; page <= 3; page++) {
+    const l = await gh(`/user/repos?per_page=100&sort=pushed&page=${page}`, t)
+    all.push(...l.map(r => ({ name: r.full_name, private: r.private, branch: r.default_branch })))
+    if (l.length < 100) break
+  }
+  return all
+})
 
 route('GET', '/api/projects', async () => {
   const state = {}

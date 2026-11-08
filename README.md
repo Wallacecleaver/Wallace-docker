@@ -26,6 +26,20 @@ Au démarrage, WDock ajoute le domaine du panel (`PANEL_DOMAIN`) dans le Caddyfi
 Les blocs gérés par WDock sont placés entre deux lignes de commentaire à la fin du Caddyfile. Ne les modifie pas à la main : tout ce qui est en dehors (tes réglages globaux, tes blocs perso) est conservé.
 Si le Caddyfile devient invalide (par exemple un domaine déjà déclaré à la main), WDock annule la modification, garde l'ancienne config et affiche l'erreur dans l'onglet Paramètres du projet.
 
+## Connexion GitHub
+
+Dans « Nouveau projet », le panel propose de se connecter à GitHub : tes repos apparaissent alors dans une liste déroulante (tu peux aussi coller un lien).
+Deux façons de se connecter :
+
+- **Bouton « Se connecter avec GitHub »** : sur GitHub, Settings > Developer settings > OAuth Apps > New OAuth App (adresses au choix), coche **Enable Device Flow**, puis mets le Client ID dans `GITHUB_CLIENT_ID` du `.env`.
+- **Coller un token** : dans le panel, aucune configuration nécessaire.
+
+Le token est enregistré dans la base du panel (`data/`) et sert aussi à cloner tes repos privés.
+
+## Adresses (DuckDNS)
+
+Chaque projet a sa propre adresse `nom.duckdns.org` et son propre port. Le panel vérifie en direct que l'adresse pointe vers ton VPS et te dit quoi faire sinon. Un compte DuckDNS gratuit a 5 noms ; un sous-domaine d'un nom existant (`addon.monnom.duckdns.org`) ne demande rien de plus.
+
 ## Ajouter un projet
 
 Dans le panel : nouveau projet, repo GitHub ou image Docker, port interne, domaine. WDock build, lance le conteneur sur un port local, ajoute le domaine dans Caddy et recharge.

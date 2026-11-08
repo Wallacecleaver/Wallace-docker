@@ -16,9 +16,10 @@ async function api(url, opts = {}) {
 }
 
 const slug = t => t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 38)
-const toDomain = (sub, base) => { const t = sub.trim().toLowerCase(); return !t ? '' : t.includes('.') || !base ? t : `${t}.${base}` }
+const toDomain = (t, suffix) => { t = t.trim().toLowerCase().replace(/^https?:\/\//, ''); return !t ? '' : !suffix || t.endsWith('.' + suffix) ? t : `${t}.${suffix}` }
+const DOMRE = /^([a-z0-9-]+\.)+[a-z]{2,}$/
 function useConfig() {
-  const [c, setC] = useState({ base: '', caddy: false })
+  const [c, setC] = useState({ base: '', suffix: '', caddy: false, ip: '' })
   useEffect(() => { api('/config').then(setC).catch(() => {}) }, [])
   return c
 }
@@ -63,13 +64,68 @@ function Field({ label, children, hint }) {
   return <label className="block"><span className="mb-1.5 block text-xs font-medium text-zinc-400">{label}</span>{children}{hint && <span className="mt-1 block text-xs text-zinc-600">{hint}</span>}</label>
 }
 
-function DomainField({ value, onChange, base, placeholder }) {
-  const inBase = !!base && (value === '' || value.endsWith('.' + base))
-  const shown = inBase && value ? value.slice(0, -(base.length + 1)) : value
+function DomainField({ value, onChange, suffix, placeholder }) {
+  const inSuffix = !!suffix && (value === '' || value.endsWith('.' + suffix))
+  const shown = inSuffix && value ? value.slice(0, -(suffix.length + 1)) : value
   return (
     <div className="flex items-stretch overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/70 transition-colors focus-within:border-accent-blue/60">
-      <input className="min-w-0 flex-1 bg-transparent px-4 py-2.5 text-sm text-white outline-none placeholder:text-zinc-600" placeholder={placeholder} value={shown} onChange={e => onChange(toDomain(e.target.value, base))} />
-      {inBase && <span className="flex shrink-0 items-center pr-4 text-sm text-zinc-500">.{base}</span>}
+      <input className="min-w-0 flex-1 bg-transparent px-4 py-2.5 text-sm text-white outline-none placeholder:text-zinc-600" placeholder={placeholder} value={shown} onChange={e => onChange(toDomain(e.target.value, suffix))} />
+      {inSuffix && <span className="flex shrink-0 items-center pr-4 text-sm text-zinc-500">.{suffix}</span>}
+    </div>
+  )
+}
+
+function DnsStatus({ domain, ip }) {
+  const [r, setR] = useState(null)
+  useEffect(() => {
+    setR(null); if (!DOMRE.test(domain || '')) return
+    const t = setTimeout(() => api('/dns?domain=' + encodeURIComponent(domain)).then(setR).catch(() => setR(null)), 700)
+    return () => clearTimeout(t)
+  }, [domain])
+  if (!r) return null
+  const name = domain.replace(/\.duckdns\.org$/, '')
+  const box = 'mt-2 rounded-lg border px-3 py-2 text-xs leading-relaxed '
+  if (r.ok) return <p className={box + 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'}>✓ Cette adresse pointe bien vers ton VPS.</p>
+  if (r.ips.length) return <p className={box + 'border-amber-500/30 bg-amber-500/10 text-amber-300'}>Cette adresse pointe vers {r.ips[0]}, pas vers ton VPS ({ip}). Soit le nom appartient à quelqu’un d’autre (choisis-en un autre), soit change son IP sur duckdns.org.</p>
+  return (
+    <p className={box + 'border-amber-500/30 bg-amber-500/10 text-amber-300'}>
+      Cette adresse n’existe pas encore. Sur <a href="https://www.duckdns.org" target="_blank" rel="noopener noreferrer" className="underline">duckdns.org</a>, ajoute le nom « {name} » avec l’IP{' '}
+      <code onClick={() => navigator.clipboard?.writeText(ip)} title="Cliquer pour copier" className="cursor-pointer rounded bg-black/40 px-1.5 py-0.5 font-mono">{ip}</code>.
+    </p>
+  )
+}
+
+function GitHubBox({ gh, reload }) {
+  const [dev, setDev] = useState(null), [tok, setTok] = useState(''), [paste, setPaste] = useState(false), [err, setErr] = useState('')
+  useEffect(() => {
+    if (!dev) return
+    const t = setInterval(() => api('/github/poll', { method: 'POST' }).then(r => { if (r.status === 'ok') { clearInterval(t); setDev(null); reload() } }).catch(x => { clearInterval(t); setDev(null); setErr(x.message) }), (dev.interval + 1) * 1000)
+    return () => clearInterval(t)
+  }, [dev, reload])
+  const start = () => { setErr(''); api('/github/device', { method: 'POST' }).then(setDev).catch(x => setErr(x.message)) }
+  const sendTok = () => { setErr(''); api('/github/token', { method: 'POST', body: { token: tok } }).then(() => { setTok(''); setPaste(false); reload() }).catch(x => setErr(x.message)) }
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4 text-sm">
+      <p className="mb-3 flex items-center gap-2 text-zinc-300"><Github size={15} /> Connecte GitHub pour choisir tes repos dans une liste (et utiliser tes repos privés).</p>
+      {dev ? (
+        <div className="space-y-2">
+          <p className="text-zinc-400">Va sur <a href={dev.url} target="_blank" rel="noopener noreferrer" className="text-accent-blue underline">{dev.url}</a> et entre ce code :</p>
+          <p onClick={() => navigator.clipboard?.writeText(dev.user_code)} title="Cliquer pour copier" className="cursor-pointer select-all font-mono text-2xl tracking-widest text-white">{dev.user_code}</p>
+          <p className="text-xs text-zinc-500">En attente de ta validation…</p>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-3">
+          {gh.deviceFlow && <button type="button" className={btnPrimary} onClick={start}><Github size={15} /> Se connecter avec GitHub</button>}
+          <button type="button" className={btn} onClick={() => setPaste(!paste)}><KeyRound size={15} /> {gh.deviceFlow ? 'Ou coller un token' : 'Coller un token GitHub'}</button>
+        </div>
+      )}
+      {paste && !dev && (
+        <div className="mt-3 flex gap-2">
+          <input type="password" className={inp} placeholder="ghp_… ou github_pat_…" value={tok} onChange={e => setTok(e.target.value)} />
+          <button type="button" className={btn} disabled={!tok} onClick={sendTok}>Connecter</button>
+        </div>
+      )}
+      {(err || gh.error) && <p className="mt-3 text-xs text-red-400">{err || gh.error}</p>}
     </div>
   )
 }
@@ -151,11 +207,23 @@ function Dashboard() {
 
 function NewProject() {
   const cfg = useConfig(), [touched, setTouched] = useState(false)
+  const [gh, setGh] = useState(null), [repos, setRepos] = useState([])
+  const loadGh = useCallback(() => api('/github').then(g => { setGh(g); if (g.connected) api('/github/repos').then(setRepos).catch(() => {}) }).catch(() => {}), [])
+  useEffect(() => { loadGh() }, [loadGh])
   const [src, setSrc] = useState('github'), [f, setF] = useState({ name: '', repo: '', branch: 'main', image: '', port: 3000, domain: '', env: '' })
   const [err, setErr] = useState(''), [busy, setBusy] = useState(false)
+  const autoDomain = name => touched || !cfg.suffix ? undefined : toDomain(slug(name), cfg.suffix)
   const set = k => e => { const v = e.target.value; setF(x => ({ ...x, [k]: v })) }
-  const onName = e => { const name = e.target.value; setF(x => ({ ...x, name, domain: touched || !cfg.base ? x.domain : toDomain(slug(name), cfg.base) })) }
+  const onName = e => { const name = e.target.value; setF(x => ({ ...x, name, domain: autoDomain(name) ?? x.domain })) }
   const onDomain = v => { setTouched(true); setF(x => ({ ...x, domain: v })) }
+  const onRepo = e => {
+    const v = e.target.value, m = repos.find(r => r.name === v)
+    setF(x => {
+      const y = { ...x, repo: v }
+      if (m) { y.branch = m.branch; if (!x.name) { y.name = m.name.split('/')[1]; y.domain = autoDomain(y.name) ?? x.domain } }
+      return y
+    })
+  }
   const submit = async e => {
     e.preventDefault(); setBusy(true); setErr('')
     try {
@@ -163,6 +231,7 @@ function NewProject() {
       location.hash = `/p/${id}`
     } catch (x) { setErr(x.message); setBusy(false) }
   }
+  const exemple = cfg.base && cfg.suffix && cfg.base.endsWith('.' + cfg.suffix) ? cfg.base.slice(0, -(cfg.suffix.length + 1)) : ''
   return (
     <form onSubmit={submit} className="fade-up mx-auto max-w-xl">
       <a href="#/" className="mb-6 inline-flex items-center gap-2 text-sm text-zinc-500 hover:text-white"><ArrowLeft size={15} /> Projets</a>
@@ -173,22 +242,31 @@ function NewProject() {
         ))}
       </div>
       <div className="space-y-4">
-        <Field label="Nom"><input className={inp} required placeholder="mon-site" value={f.name} onChange={onName} /></Field>
+        <Field label="Nom"><input className={inp} required placeholder="mon-addon" value={f.name} onChange={onName} /></Field>
         {src === 'github' ? (
-          <Field label="Repo GitHub" hint="Colle le lien du repo ou écris proprietaire/repo"><input className={inp} required placeholder="Wallacecleaver/mon-repo" value={f.repo} onChange={set('repo')} /></Field>
+          <>
+            {gh && !gh.connected && <GitHubBox gh={gh} reload={loadGh} />}
+            <Field label="Repo GitHub" hint={gh?.connected ? `Choisis dans la liste ou colle un lien · connecté : @${gh.login}` : 'Colle le lien du repo ou écris proprietaire/repo'}>
+              <input className={inp} required list="wd-repos" placeholder="Wallacecleaver/mon-repo" value={f.repo} onChange={onRepo} />
+              <datalist id="wd-repos">{repos.map(r => <option key={r.name} value={r.name}>{r.private ? 'privé' : 'public'}</option>)}</datalist>
+            </Field>
+            {gh?.connected && <button type="button" className="text-xs text-zinc-500 underline hover:text-white" onClick={() => api('/github', { method: 'DELETE' }).then(() => { setRepos([]); loadGh() })}>Déconnecter GitHub</button>}
+          </>
         ) : (
           <Field label="Image Docker"><input className={inp} required placeholder="nginx:alpine" value={f.image} onChange={set('image')} /></Field>
         )}
-        <Field label="Adresse du site" hint={f.domain ? `https://${f.domain}` : 'Laisse vide pour ne pas publier le projet sur internet'}>
-          <DomainField value={f.domain} onChange={onDomain} base={cfg.base} placeholder={cfg.base ? 'mon-site' : 'mon-site.mondomaine.fr'} />
+        <Field label="Adresse de l’addon" hint={f.domain ? `https://${f.domain}` : 'Laisse vide pour ne pas publier le projet sur internet'}>
+          <DomainField value={f.domain} onChange={onDomain} suffix={cfg.suffix} placeholder="mon-addon" />
+          <DnsStatus domain={f.domain} ip={cfg.ip} />
+          {exemple && <p className="mt-2 text-xs text-zinc-600">Astuce : écrire <span className="font-mono text-zinc-500">mon-addon.{exemple}</span> fonctionne sans rien créer sur DuckDNS.</p>}
         </Field>
-        <details className="group rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
-          <summary className="cursor-pointer text-sm text-zinc-400 transition-colors hover:text-white">Options avancées (port, branche, variables)</summary>
+        <Field label="Port de l’addon" hint="Le port utilisé par ton addon (ex. 7000). Dans le doute, laisse 3000 : il est aussi transmis à l’appli via la variable PORT.">
+          <input className={inp} type="number" value={f.port} onChange={set('port')} />
+        </Field>
+        <details className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
+          <summary className="cursor-pointer text-sm text-zinc-400 transition-colors hover:text-white">Options avancées (branche, variables)</summary>
           <div className="mt-4 space-y-4">
-            <div className={cx('grid gap-3', src === 'github' && 'grid-cols-2')}>
-              <Field label="Port de l’appli" hint="Laisse 3000 : il est transmis à l’appli via la variable PORT. Change-le seulement si son code écoute un port fixe (ex. 7000)."><input className={inp} type="number" value={f.port} onChange={set('port')} /></Field>
-              {src === 'github' && <Field label="Branche"><input className={inp} value={f.branch} onChange={set('branch')} /></Field>}
-            </div>
+            {src === 'github' && <Field label="Branche"><input className={inp} value={f.branch} onChange={set('branch')} /></Field>}
             <Field label="Variables d’environnement" hint="Une par ligne : CLE=valeur"><textarea className={cx(inp, 'h-28 font-mono text-xs')} value={f.env} onChange={set('env')} /></Field>
           </div>
         </details>
@@ -265,10 +343,10 @@ function ProjectPage({ id }) {
       {tab === 'settings' && (
         <div className="max-w-xl space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Port de l’appli" hint="Celui sur lequel ton appli écoute"><input className={inp} type="number" value={cfg.port} onChange={e => setCfg({ ...cfg, port: e.target.value })} /></Field>
+            <Field label="Port de l’addon" hint="Celui sur lequel ton addon écoute"><input className={inp} type="number" value={cfg.port} onChange={e => setCfg({ ...cfg, port: e.target.value })} /></Field>
             {p.source === 'github' && <Field label="Branche"><input className={inp} value={cfg.branch} onChange={e => setCfg({ ...cfg, branch: e.target.value })} /></Field>}
           </div>
-          <Field label="Adresse du site" hint={cfg.domain ? `https://${cfg.domain}` : undefined}><DomainField value={cfg.domain} onChange={d => setCfg({ ...cfg, domain: d })} base={conf.base} placeholder={conf.base ? 'mon-site' : 'mon-site.mondomaine.fr'} /></Field>
+          <Field label="Adresse de l’addon" hint={cfg.domain ? `https://${cfg.domain}` : undefined}><DomainField value={cfg.domain} onChange={d => setCfg({ ...cfg, domain: d })} suffix={conf.suffix} placeholder="mon-addon" /><DnsStatus domain={cfg.domain} ip={conf.ip} /></Field>
           <button className={btn} onClick={() => save(true).then(() => setTab('deploys'))}>Appliquer & redéployer</button>
           {p.caddy?.enabled
             ? (
