@@ -264,6 +264,26 @@ function NewProject() {
   useEffect(() => { loadGh() }, [loadGh])
   const [src, setSrc] = useState('github'), [f, setF] = useState({ name: '', repo: '', branch: 'main', image: '', port: 3000, domain: '', env: '' })
   const [err, setErr] = useState(''), [busy, setBusy] = useState(false)
+  const [envFile, setEnvFile] = useState(''), [envEdited, setEnvEdited] = useState(false), [adv, setAdv] = useState(false)
+  // Préremplit les variables d'environnement depuis le .env.example du repo choisi
+  useEffect(() => {
+    if (src !== 'github' || envEdited) return
+    const m = f.repo.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '').replace(/\/$/, '').match(/^([\w.-]+\/[\w.-]+)/)
+    if (!m) { setEnvFile(''); return }
+    let dead = false
+    const t = setTimeout(() => {
+      api(`/github/env?repo=${encodeURIComponent(m[1])}&branch=${encodeURIComponent(f.branch || '')}`).then(r => {
+        if (dead) return
+        if (!r.file) { setEnvFile(''); setF(x => x.env && x.envAuto ? { ...x, env: '', envAuto: false } : x); return }
+        const vars = textToEnv(r.text), port = vars.PORT
+        delete vars.PORT
+        setEnvFile(r.file)
+        setF(x => ({ ...x, env: envToText(vars), envAuto: true, port: port && /^\d{2,5}$/.test(port) && Number(x.port) === 3000 ? Number(port) : x.port }))
+        if (Object.keys(vars).length) setAdv(true)
+      }).catch(() => {})
+    }, 500)
+    return () => { dead = true; clearTimeout(t) }
+  }, [f.repo, f.branch, src, envEdited])
   const autoDomain = name => touched || !cfg.suffix ? undefined : toDomain(slug(name), cfg.suffix)
   const set = k => e => { const v = e.target.value; setF(x => ({ ...x, [k]: v })) }
   const onName = e => { const name = e.target.value; setF(x => ({ ...x, name, domain: autoDomain(name) ?? x.domain })) }
@@ -316,11 +336,11 @@ function NewProject() {
         <Field label="Port de l’addon" hint="Le port utilisé par ton addon (ex. 7000). Dans le doute, laisse 3000 : il est aussi transmis à l’appli via la variable PORT.">
           <input className={inp} type="number" value={f.port} onChange={set('port')} />
         </Field>
-        <details className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
+        <details open={adv} onToggle={e => setAdv(e.currentTarget.open)} className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
           <summary className="cursor-pointer text-sm text-zinc-400 transition-colors hover:text-white">Options avancées (branche, variables)</summary>
           <div className="mt-4 space-y-4">
             {src === 'github' && <Field label="Branche"><input className={inp} value={f.branch} onChange={set('branch')} /></Field>}
-            <Field label="Variables d’environnement" hint="Une par ligne : CLE=valeur"><textarea className={cx(inp, 'h-28 font-mono text-xs')} value={f.env} onChange={set('env')} /></Field>
+            <Field label="Variables d’environnement" hint={envFile && !envEdited ? `Prérempli depuis ${envFile} — remplace les valeurs d’exemple par les tiennes` : 'Une par ligne : CLE=valeur'}><textarea className={cx(inp, 'h-28 font-mono text-xs')} value={f.env} onChange={e => { setEnvEdited(true); set('env')(e) }} /></Field>
           </div>
         </details>
       </div>

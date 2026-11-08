@@ -275,6 +275,25 @@ route('GET', '/api/github/repos', async () => {
   return all
 })
 
+// Cherche un fichier d'exemple d'environnement (.env.example, .env.sample…) à la racine du repo
+const ENV_FILES = ['.env.example', '.env.sample', '.env.template', '.env.dist', '.env.default', 'env.example', 'example.env', 'sample.env', '.env.local.example', '.env.production.example']
+route('GET', '/api/github/env', async ({ req }) => {
+  const q = new URL(req.url, 'http://x').searchParams
+  const repo = String(q.get('repo') || ''), branch = String(q.get('branch') || '')
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) bad('Repo invalide')
+  if (branch && !/^[\w./-]{1,100}$/.test(branch)) bad('Branche invalide')
+  const ref = branch ? `?ref=${encodeURIComponent(branch)}` : ''
+  let list
+  try { list = await gh(`/repos/${repo}/contents${ref}`) } catch { return { file: null } }
+  if (!Array.isArray(list)) return { file: null }
+  const names = list.filter(f => f.type === 'file').map(f => f.name)
+  const file = ENV_FILES.find(n => names.includes(n)) || names.find(n => /^\.?env.*\.(example|sample|template|dist)$|^(example|sample)\.env$/i.test(n))
+  if (!file) return { file: null }
+  const f = await gh(`/repos/${repo}/contents/${encodeURIComponent(file)}${ref}`)
+  if (f.encoding !== 'base64' || f.size > 50000) return { file: null }
+  return { file, text: Buffer.from(f.content, 'base64').toString('utf8') }
+})
+
 route('GET', '/api/projects', async () => {
   const state = {}
   for (const l of lines(await out('docker', ['ps', '-a', '--format', '{{.State}}|{{.Label "shipyard.project"}}']))) {
