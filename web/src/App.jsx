@@ -350,6 +350,8 @@ function NewProject() {
   )
 }
 
+const TABS = [['deploys', History, 'Déploiements'], ['logs', Terminal, 'Logs'], ['env', KeyRound, 'Variables'], ['settings', Settings, 'Paramètres']]
+
 function ProjectPage({ id }) {
   const conf = useConfig()
   const [p, reload] = usePoll(`/projects/${id}`, 3000)
