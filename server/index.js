@@ -2,7 +2,7 @@ import http from 'node:http'
 import { DatabaseSync } from 'node:sqlite'
 import { spawn } from 'node:child_process'
 import dns from 'node:dns/promises'
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createReadStream, existsSync, statSync } from 'node:fs'
 import path from 'node:path'
@@ -175,6 +175,13 @@ async function deploy(p) {
     if (old.length) { log('→ Arrêt de l’ancienne version\n'); await out('docker', ['stop', ...old]) }
     const args = ['run', '-d', '--name', name, '--restart', 'unless-stopped', '--memory', E.APP_MEMORY || '512m',
       '-l', `shipyard.project=${p.id}`, '-p', `${BIND}:${p.hostport}:${p.port}`, '-e', `PORT=${p.port}`]
+    // Les VOLUME déclarés dans l'image (ex. VOLUME /app/data) deviennent des volumes nommés : les données survivent aux redéploiements
+    let vols = {}; try { vols = JSON.parse(await out('docker', ['image', 'inspect', '-f', '{{json .Config.Volumes}}', image])) || {} } catch {}
+    for (const dir of Object.keys(vols)) {
+      const vol = `shipyard-${p.id}-${createHash('sha1').update(dir).digest('hex').slice(0, 6)}`
+      await out('docker', ['volume', 'create', '--label', `shipyard.project=${p.id}`, vol])
+      args.push('-v', `${vol}:${dir}`); log(`→ Volume ${vol} → ${dir}\n`)
+    }
     for (const [k, v] of Object.entries(p.env)) args.push('-e', `${k}=${v}`)
     log(`→ Démarrage du conteneur (port ${p.hostport})\n`)
     await run('docker', [...args, image], { onData: log })
@@ -347,6 +354,8 @@ route('DELETE', '/api/projects/:id', async ({ params }) => {
   if (c.length) await out('docker', ['rm', '-f', ...c])
   for (const tag of lines(await out('docker', ['images', `shipyard/${p.id}`, '--format', '{{.Tag}}']))) await out('docker', ['rmi', `shipyard/${p.id}:${tag}`])
   await rm(path.join(DATA, 'src', p.id), { recursive: true, force: true })
+  const vols = lines(await out('docker', ['volume', 'ls', '-q', '--filter', `label=shipyard.project=${p.id}`]))
+  if (vols.length) await out('docker', ['volume', 'rm', ...vols])
   db.prepare('delete from deploys where project=?').run(p.id); db.prepare('delete from projects where id=?').run(p.id)
   await syncCaddy()
 })
