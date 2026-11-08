@@ -493,6 +493,14 @@ function ProjectPage({ id }) {
         </div>
       </div>
 
+      {run && stats.health === 'unhealthy' && (
+        <div className="mb-4 rounded-xl border border-red-900/50 bg-red-950/30 px-4 py-3 text-sm text-red-300">
+          <p className="flex items-center gap-2 font-medium"><HeartPulse size={15} /> Le test de santé (HEALTHCHECK) du conteneur échoue</p>
+          {stats.healthOut
+            ? <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-red-200/80">{stats.healthOut}{stats.healthExit != null ? `\n(code de sortie ${stats.healthExit})` : ''}</pre>
+            : <p className="mt-1 text-xs text-red-300/70">Aucune sortie du test : regarde l’onglet Logs.</p>}
+        </div>
+      )}
       <div className="mb-8 grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard icon={Cpu} label="CPU" value={run ? `${stats.cpu.toFixed(1)} %` : '—'}>
           {run ? <div className="mt-2"><Spark data={hist.cpu} color="#2e9bfb" id="sp-cpu" /></div> : <p className="mt-2 text-xs text-zinc-600">Conteneur arrêté</p>}

@@ -133,10 +133,48 @@ ENV NODE_ENV=production
 CMD ["npm","start"]
 `
 
+// Projets pour lesquels un push GitHub est arrivé pendant un déploiement : on redéploie une fois le premier terminé
+const pending = new Set()
+
 function start(p) {
   if (deploying.has(p.id)) bad('Déploiement déjà en cours', 409)
   deploying.add(p.id)
-  deploy(p).catch(console.error).finally(() => deploying.delete(p.id))
+  deploy(p).catch(console.error).finally(() => {
+    deploying.delete(p.id)
+    if (pending.delete(p.id)) { try { start(getP(p.id)) } catch (e) { console.error('[redeploy en attente]', e.message) } }
+  })
+}
+
+// Pas de déploiement en parallèle : un push reçu pendant un build est mis en attente (pas perdu)
+function requestDeploy(p) {
+  if (deploying.has(p.id)) { pending.add(p.id); return { queued: true, waiting: true } }
+  start(p); return { queued: true }
+}
+
+// État de santé Docker d'un conteneur (null si l'image n'a pas de HEALTHCHECK) + sortie du dernier test
+async function healthOf(c) {
+  let h; try { h = JSON.parse(await out('docker', ['inspect', '-f', '{{json .State.Health}}', c])) } catch { return null }
+  if (!h) return null
+  const last = (h.Log || []).at(-1)
+  return { status: h.Status, streak: h.FailingStreak || 0, exit: last?.ExitCode, output: (last?.Output || '').trim().slice(-400) }
+}
+const HEALTH_TIMEOUT = (+E.HEALTH_TIMEOUT || 180) * 1000
+
+// Attend que le conteneur soit réellement prêt : s'il a un HEALTHCHECK on attend « healthy », sinon on vérifie qu'il tient 5 s
+async function waitReady(name, log) {
+  const t0 = Date.now(); let announced = false
+  for (;;) {
+    await new Promise(r => setTimeout(r, announced ? 2000 : 5000))
+    if (await out('docker', ['inspect', '-f', '{{.State.Running}}', name]) !== 'true')
+      throw new Error('Le conteneur a planté au démarrage :\n' + await out('docker', ['logs', '--tail', '40', name]))
+    const h = await healthOf(name)
+    if (!h) return log('✓ Conteneur démarré (pas de test de santé défini dans l’image)\n')
+    if (h.status === 'healthy') return log('✓ Test de santé OK\n')
+    const why = () => h.output ? `\nDernier test (code ${h.exit}) : ${h.output}` : ''
+    if (h.status === 'unhealthy') throw new Error('Le test de santé (HEALTHCHECK) échoue.' + why() + '\n' + await out('docker', ['logs', '--tail', '20', name]))
+    if (!announced) { log('→ Attente du test de santé (HEALTHCHECK)…\n'); announced = true }
+    if (Date.now() - t0 > HEALTH_TIMEOUT) throw new Error(`Le test de santé n’est pas passé au vert après ${HEALTH_TIMEOUT / 1000} s.` + why())
+  }
 }
 
 async function deploy(p) {
@@ -157,6 +195,8 @@ async function deploy(p) {
       const remote = TOKEN ? `https://x-access-token:${TOKEN}@github.com/${p.repo}.git` : `https://github.com/${p.repo}.git`
       log(`→ git clone ${p.repo}@${p.branch}\n`)
       await run('git', ['clone', '--depth', '1', '-b', p.branch, remote, dir], { onData: log })
+      // Le token ne doit pas rester dans .git/config : un `COPY . .` le recopierait dans l'image Docker
+      if (TOKEN) await run('git', ['remote', 'set-url', 'origin', `https://github.com/${p.repo}.git`], { cwd: dir })
       if (!existsSync(path.join(dir, 'Dockerfile'))) {
         if (!existsSync(path.join(dir, 'package.json'))) throw new Error('Ni Dockerfile ni package.json dans le repo')
         log('→ Pas de Dockerfile : génération d’un Dockerfile Node\n')
@@ -186,9 +226,7 @@ async function deploy(p) {
     log(`→ Démarrage du conteneur (port ${p.hostport})\n`)
     await run('docker', [...args, image], { onData: log })
 
-    await new Promise(r => setTimeout(r, 5000))
-    if (await out('docker', ['inspect', '-f', '{{.State.Running}}', name]) !== 'true')
-      throw new Error('Le conteneur a planté au démarrage :\n' + await out('docker', ['logs', '--tail', '40', name]))
+    await waitReady(name, log)
     if (old.length) await out('docker', ['rm', '-f', ...old])
     for (const tag of lines(await out('docker', ['images', `shipyard/${p.id}`, '--format', '{{.Tag}}'])))
       if (tag !== String(id)) await out('docker', ['rmi', `shipyard/${p.id}:${tag}`])
@@ -377,14 +415,15 @@ route('GET', '/api/deploys/:id/log', ({ req, res, params }) => {
 route('GET', '/api/projects/:id/stats', async ({ params }) => {
   const [c] = await ctrs(getP(params.id).id)
   if (!c) return { running: false }
-  const [s, i] = await Promise.all([
+  const [s, i, hl] = await Promise.all([
     out('docker', ['stats', '--no-stream', '--format', '{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.PIDs}}', c]),
     out('docker', ['inspect', '-f', '{{.State.Running}}|{{.State.StartedAt}}|{{.RestartCount}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}', c]),
+    healthOf(c),
   ])
   const [run, started, restarts, health] = i.split('|')
   if (run !== 'true') return { running: false, restarts: +restarts || 0 }
   const [cpu, mem = '', memp, net = '', pids] = s.split('|'), [used, limit] = mem.split(' / '), [rx, tx] = net.split(' / ')
-  return { running: true, cpu: parseFloat(cpu) || 0, memUsed: used, memLimit: limit, memPct: parseFloat(memp) || 0, rx, tx, pids: +pids || 0, started, restarts: +restarts || 0, health: health || '' }
+  return { running: true, cpu: parseFloat(cpu) || 0, memUsed: used, memLimit: limit, memPct: parseFloat(memp) || 0, rx, tx, pids: +pids || 0, started, restarts: +restarts || 0, health: health || '', healthOut: hl && hl.status !== 'healthy' ? hl.output : '', healthExit: hl?.exit }
 })
 
 const st = { t: 0, v: {} }
@@ -400,10 +439,13 @@ route('GET', '/api/stats', async () => {
   return st.v
 })
 
-route('POST', '/api/hooks/:id/:token', ({ params, body }) => {
+route('POST', '/api/hooks/:id/:token', ({ req, params, body }) => {
   const p = getP(params.id); if (!same(p.hook, params.token)) bad('Token invalide', 403)
+  const evt = req.headers['x-github-event']
+  if (evt === 'ping') return { pong: true }                      // message de test envoyé par GitHub à la création du webhook
+  if (evt && evt !== 'push') return { skipped: true }
   if (body.ref && body.ref !== `refs/heads/${p.branch}`) return { skipped: true }
-  start(p); return { queued: true }
+  return requestDeploy(p)
 }, false)
 
 // ---------- statique + serveur ----------

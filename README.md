@@ -45,6 +45,8 @@ Chaque projet a sa propre adresse `nom.duckdns.org` et son propre port. Le panel
 Dans le panel : nouveau projet, repo GitHub ou image Docker, port interne, domaine. WDock build, lance le conteneur sur un port local, ajoute le domaine dans Caddy et recharge.
 
 Redéploiement automatique : copie l'URL du webhook (Paramètres) dans GitHub → Settings → Webhooks. Si le nouveau déploiement plante, l'ancienne version est relancée.
+Si l'image définit un `HEALTHCHECK`, WDock attend qu'il soit « sain » avant d'annoncer « En ligne » : s'il échoue, la raison s'affiche dans les logs du déploiement et l'ancienne version est remise (délai réglable avec `HEALTH_TIMEOUT`).
+Un push reçu pendant un déploiement n'est pas perdu : il déclenche un redéploiement dès que le premier est fini. Le message de test (`ping`) de GitHub est ignoré.
 
 ## Sans gestion automatique de Caddy
 
