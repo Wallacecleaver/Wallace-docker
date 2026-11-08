@@ -27,6 +27,19 @@ function usePoll(url, ms) {
   return [d, load]
 }
 
+function Logo({ size = 32 }) {
+  const w = 'M15 19 24 47 32 29 40 47 49 19'
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64" role="img" aria-label="WDock" className="shrink-0">
+      <defs><linearGradient id="wd-g" x1="0" y1="0" x2="1" y2="1"><stop stopColor="#2e9bfb" /><stop offset="1" stopColor="#CE42FF" /></linearGradient></defs>
+      <rect width="64" height="64" rx="16" fill="url(#wd-g)" />
+      <path d={w} transform="translate(3 3)" fill="none" stroke="#fff" strokeOpacity=".35" strokeWidth="6.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d={w} fill="none" stroke="#fff" strokeWidth="6.5" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="32" cy="15.5" r="3.2" fill="#fff" />
+    </svg>
+  )
+}
+
 // ---------- ui ----------
 const inp = 'w-full rounded-xl border border-zinc-800 bg-zinc-900/70 px-4 py-2.5 text-sm text-white outline-none transition-colors placeholder:text-zinc-600 focus:border-accent-blue/60'
 const btn = 'inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-2 text-sm text-zinc-300 transition-all hover:border-zinc-600 hover:text-white disabled:opacity-50'
@@ -67,8 +80,8 @@ function Login({ onOk }) {
       <div className="orb -top-32 -left-32 h-[500px] w-[500px] bg-accent-blue/15" />
       <div className="orb -right-32 top-1/3 h-[400px] w-[400px] bg-accent-purple/10" />
       <form onSubmit={submit} className="fade-up w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-900/70 p-8 backdrop-blur">
-        <div className="mb-6 flex h-12 w-12 items-center justify-center rounded-xl bg-brand"><Rocket size={22} className="text-white" /></div>
-        <h1 className="font-display text-3xl font-bold"><span className="gradient-text">Shipyard</span></h1>
+        <div className="mb-6"><Logo size={52} /></div>
+        <h1 className="font-display text-3xl font-bold"><span className="gradient-text">WDock</span></h1>
         <p className="mb-6 mt-1 text-sm text-zinc-500">Déploie tes projets sur ton VPS.</p>
         <input type="password" autoFocus className={inp} placeholder="Mot de passe" value={pw} onChange={e => setPw(e.target.value)} />
         {err && <p className="mt-3 text-sm text-red-400">{err}</p>}
@@ -272,7 +285,7 @@ export default function App() {
       <div className="dot-grid fixed inset-0 -z-10 opacity-50" />
       <header className="sticky top-0 z-50 border-b border-zinc-800/30 bg-zinc-950/80 backdrop-blur-xl">
         <nav className="mx-auto flex h-16 max-w-[1200px] items-center justify-between px-6">
-          <a href="#/" className="font-display text-xl font-bold"><span className="gradient-text">S</span><span className="text-white">hipyard</span><span className="text-zinc-600">.</span></a>
+          <a href="#/" className="flex items-center gap-2.5 font-display text-xl font-bold"><Logo size={30} /><span><span className="gradient-text">W</span><span className="text-white">Dock</span></span></a>
           <button className="flex items-center gap-2 text-sm text-zinc-500 transition-colors hover:text-white" onClick={async () => { await api('/logout', { method: 'POST' }); setAuthed(false) }}><LogOut size={15} /> Déconnexion</button>
         </nav>
       </header>

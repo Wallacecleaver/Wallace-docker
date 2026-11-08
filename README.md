@@ -1,7 +1,7 @@
-# Shipyard
+# WDock
 
 Mini-PaaS auto-hébergé : déploie un repo GitHub ou une image Docker sur ton VPS.
-Chaque projet est publié sur un port local (4000, 4001…) et **Shipyard gère ton Caddy tout seul** : il écrit les blocs `reverse_proxy` dans ton Caddyfile et recharge Caddy à chaque ajout, changement de domaine ou suppression de projet.
+Chaque projet est publié sur un port local (4000, 4001…) et **WDock gère ton Caddy tout seul** : il écrit les blocs `reverse_proxy` dans ton Caddyfile et recharge Caddy à chaque ajout, changement de domaine ou suppression de projet.
 
 ## Prérequis
 
@@ -14,21 +14,21 @@ Chaque projet est publié sur un port local (4000, 4001…) et **Shipyard gère 
 
 ```bash
 cd ~
-git clone https://github.com/Wallacecleaver/Wallace-docker.git shipyard
-cd shipyard
+git clone https://github.com/Wallacecleaver/Wallace-docker.git wdock
+cd wdock
 cp .env.example .env
 nano .env        # ADMIN_PASSWORD, SESSION_SECRET (openssl rand -hex 32), PANEL_DOMAIN
 docker compose up -d --build
 ```
 
-Au démarrage, Shipyard ajoute le domaine du panel (`PANEL_DOMAIN`) dans le Caddyfile et recharge Caddy. Ouvre ensuite `https://ton-panel.duckdns.org`.
+Au démarrage, WDock ajoute le domaine du panel (`PANEL_DOMAIN`) dans le Caddyfile et recharge Caddy. Ouvre ensuite `https://ton-panel.duckdns.org`.
 
-Les blocs gérés par Shipyard sont placés entre deux lignes de commentaire à la fin du Caddyfile. Ne les modifie pas à la main : tout ce qui est en dehors (tes réglages globaux, tes blocs perso) est conservé.
-Si le Caddyfile devient invalide (par exemple un domaine déjà déclaré à la main), Shipyard annule la modification, garde l'ancienne config et affiche l'erreur dans l'onglet Paramètres du projet.
+Les blocs gérés par WDock sont placés entre deux lignes de commentaire à la fin du Caddyfile. Ne les modifie pas à la main : tout ce qui est en dehors (tes réglages globaux, tes blocs perso) est conservé.
+Si le Caddyfile devient invalide (par exemple un domaine déjà déclaré à la main), WDock annule la modification, garde l'ancienne config et affiche l'erreur dans l'onglet Paramètres du projet.
 
 ## Ajouter un projet
 
-Dans le panel : nouveau projet, repo GitHub ou image Docker, port interne, domaine. Shipyard build, lance le conteneur sur un port local, ajoute le domaine dans Caddy et recharge.
+Dans le panel : nouveau projet, repo GitHub ou image Docker, port interne, domaine. WDock build, lance le conteneur sur un port local, ajoute le domaine dans Caddy et recharge.
 
 Redéploiement automatique : copie l'URL du webhook (Paramètres) dans GitHub → Settings → Webhooks. Si le nouveau déploiement plante, l'ancienne version est relancée.
 

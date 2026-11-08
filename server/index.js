@@ -321,4 +321,4 @@ http.createServer(async (req, res) => {
   } catch (e) {
     if (res.headersSent) res.end(); else json(res, e.status || 500, { error: e.message })
   }
-}).listen(+E.PORT || 3000, () => console.log(`Shipyard prêt sur :${E.PORT || 3000}`))
+}).listen(+E.PORT || 3000, () => console.log(`WDock prêt sur :${E.PORT || 3000}`))
