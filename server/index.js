@@ -74,6 +74,8 @@ function check(o) {
   return o
 }
 
+const taken = (d, id = '') => !!d && (d === PANEL_DOMAIN || !!db.prepare('select 1 from projects where domain=? and id!=?').get(d, id))
+
 // ---------- Caddy (géré automatiquement si CADDYFILE est défini) ----------
 const BEGIN = '# >>> shipyard : bloc géré automatiquement, ne pas modifier >>>'
 const END = '# <<< shipyard <<<'
@@ -202,6 +204,7 @@ route('POST', '/api/login', ({ req, res, body }) => {
 route('POST', '/api/logout', ({ res }) => { res.setHeader('set-cookie', 'sy=; HttpOnly; Path=/; Max-Age=0') })
 route('GET', '/api/me', () => ({ ok: true }))
 route('GET', '/api/caddy', () => caddy)
+route('GET', '/api/config', () => ({ base: PANEL_DOMAIN, caddy: caddy.enabled }))
 
 route('GET', '/api/projects', async () => {
   const state = {}
@@ -221,6 +224,7 @@ route('POST', '/api/projects', async ({ body }) => {
   if (!SLUG.test(id) || ['api'].includes(id)) bad('Nom invalide ou réservé')
   if (db.prepare('select 1 from projects where id=?').get(id)) bad('Ce nom existe déjà', 409)
   const o = check({ ...body })
+  if (taken(o.domain)) bad('Cette adresse est déjà utilisée', 409)
   const hostport = (db.prepare('select max(hostport) m from projects').get().m || PORT_START - 1) + 1
   db.prepare('insert into projects(id,name,source,repo,branch,image,port,domain,env,hook,created,hostport) values(?,?,?,?,?,?,?,?,?,?,?,?)')
     .run(id, name, o.source, o.repo || '', o.branch || '', o.image || '', o.port, o.domain, JSON.stringify(o.env), randomBytes(16).toString('hex'), Date.now(), hostport)
@@ -238,6 +242,7 @@ route('GET', '/api/projects/:id', async ({ params }) => {
 
 route('PATCH', '/api/projects/:id', async ({ params, body }) => {
   const p = getP(params.id), o = check({ ...p, ...body, source: p.source })
+  if (taken(o.domain, p.id)) bad('Cette adresse est déjà utilisée', 409)
   db.prepare('update projects set branch=?,image=?,port=?,domain=?,env=? where id=?')
     .run(o.branch, o.image, o.port, o.domain, JSON.stringify(o.env), p.id)
   await syncCaddy()

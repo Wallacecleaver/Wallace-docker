@@ -15,6 +15,14 @@ async function api(url, opts = {}) {
   return j
 }
 
+const slug = t => t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 38)
+const toDomain = (sub, base) => { const t = sub.trim().toLowerCase(); return !t ? '' : t.includes('.') || !base ? t : `${t}.${base}` }
+function useConfig() {
+  const [c, setC] = useState({ base: '', caddy: false })
+  useEffect(() => { api('/config').then(setC).catch(() => {}) }, [])
+  return c
+}
+
 function useHash() {
   const [h, s] = useState(location.hash.slice(1) || '/')
   useEffect(() => { const f = () => s(location.hash.slice(1) || '/'); addEventListener('hashchange', f); return () => removeEventListener('hashchange', f) }, [])
@@ -53,6 +61,17 @@ function Badge({ s }) {
 
 function Field({ label, children, hint }) {
   return <label className="block"><span className="mb-1.5 block text-xs font-medium text-zinc-400">{label}</span>{children}{hint && <span className="mt-1 block text-xs text-zinc-600">{hint}</span>}</label>
+}
+
+function DomainField({ value, onChange, base, placeholder }) {
+  const inBase = !!base && (value === '' || value.endsWith('.' + base))
+  const shown = inBase && value ? value.slice(0, -(base.length + 1)) : value
+  return (
+    <div className="flex items-stretch overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/70 transition-colors focus-within:border-accent-blue/60">
+      <input className="min-w-0 flex-1 bg-transparent px-4 py-2.5 text-sm text-white outline-none placeholder:text-zinc-600" placeholder={placeholder} value={shown} onChange={e => onChange(toDomain(e.target.value, base))} />
+      {inBase && <span className="flex shrink-0 items-center pr-4 text-sm text-zinc-500">.{base}</span>}
+    </div>
+  )
 }
 
 function LogView({ url, h = 'h-96' }) {
@@ -131,9 +150,12 @@ function Dashboard() {
 }
 
 function NewProject() {
+  const cfg = useConfig(), [touched, setTouched] = useState(false)
   const [src, setSrc] = useState('github'), [f, setF] = useState({ name: '', repo: '', branch: 'main', image: '', port: 3000, domain: '', env: '' })
   const [err, setErr] = useState(''), [busy, setBusy] = useState(false)
-  const set = k => e => setF({ ...f, [k]: e.target.value })
+  const set = k => e => { const v = e.target.value; setF(x => ({ ...x, [k]: v })) }
+  const onName = e => { const name = e.target.value; setF(x => ({ ...x, name, domain: touched || !cfg.base ? x.domain : toDomain(slug(name), cfg.base) })) }
+  const onDomain = v => { setTouched(true); setF(x => ({ ...x, domain: v })) }
   const submit = async e => {
     e.preventDefault(); setBusy(true); setErr('')
     try {
@@ -151,20 +173,25 @@ function NewProject() {
         ))}
       </div>
       <div className="space-y-4">
-        <Field label="Nom"><input className={inp} required placeholder="mon-site" value={f.name} onChange={set('name')} /></Field>
+        <Field label="Nom"><input className={inp} required placeholder="mon-site" value={f.name} onChange={onName} /></Field>
         {src === 'github' ? (
-          <div className="grid grid-cols-[1fr_8rem] gap-3">
-            <Field label="Repo"><input className={inp} required placeholder="Wallacecleaver/mon-repo" value={f.repo} onChange={set('repo')} /></Field>
-            <Field label="Branche"><input className={inp} value={f.branch} onChange={set('branch')} /></Field>
-          </div>
+          <Field label="Repo GitHub" hint="Colle le lien du repo ou écris proprietaire/repo"><input className={inp} required placeholder="Wallacecleaver/mon-repo" value={f.repo} onChange={set('repo')} /></Field>
         ) : (
-          <Field label="Image"><input className={inp} required placeholder="nginx:alpine" value={f.image} onChange={set('image')} /></Field>
+          <Field label="Image Docker"><input className={inp} required placeholder="nginx:alpine" value={f.image} onChange={set('image')} /></Field>
         )}
-        <div className="grid grid-cols-[8rem_1fr] gap-3">
-          <Field label="Port interne"><input className={inp} type="number" value={f.port} onChange={set('port')} /></Field>
-          <Field label="Domaine (optionnel)"><input className={inp} placeholder="mon-site.mondomaine.fr" value={f.domain} onChange={set('domain')} /></Field>
-        </div>
-        <Field label="Variables d’environnement" hint="Une par ligne : CLE=valeur"><textarea className={cx(inp, 'h-28 font-mono text-xs')} value={f.env} onChange={set('env')} /></Field>
+        <Field label="Adresse du site" hint={f.domain ? `https://${f.domain}` : 'Laisse vide pour ne pas publier le projet sur internet'}>
+          <DomainField value={f.domain} onChange={onDomain} base={cfg.base} placeholder={cfg.base ? 'mon-site' : 'mon-site.mondomaine.fr'} />
+        </Field>
+        <details className="group rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
+          <summary className="cursor-pointer text-sm text-zinc-400 transition-colors hover:text-white">Options avancées (port, branche, variables)</summary>
+          <div className="mt-4 space-y-4">
+            <div className={cx('grid gap-3', src === 'github' && 'grid-cols-2')}>
+              <Field label="Port de l’appli" hint="Laisse 3000 : il est transmis à l’appli via la variable PORT. Change-le seulement si son code écoute un port fixe (ex. 7000)."><input className={inp} type="number" value={f.port} onChange={set('port')} /></Field>
+              {src === 'github' && <Field label="Branche"><input className={inp} value={f.branch} onChange={set('branch')} /></Field>}
+            </div>
+            <Field label="Variables d’environnement" hint="Une par ligne : CLE=valeur"><textarea className={cx(inp, 'h-28 font-mono text-xs')} value={f.env} onChange={set('env')} /></Field>
+          </div>
+        </details>
       </div>
       {err && <p className="mt-4 text-sm text-red-400">{err}</p>}
       <button className={cx(btnPrimary, 'mt-6 w-full')} disabled={busy}><Rocket size={16} /> Déployer</button>
@@ -172,9 +199,8 @@ function NewProject() {
   )
 }
 
-const TABS = [['deploys', History, 'Déploiements'], ['logs', Terminal, 'Logs'], ['env', KeyRound, 'Variables'], ['settings', Settings, 'Paramètres']]
-
 function ProjectPage({ id }) {
+  const conf = useConfig()
   const [p, reload] = usePoll(`/projects/${id}`, 3000)
   const [tab, setTab] = useState('deploys'), [sel, setSel] = useState(null), [env, setEnv] = useState(null), [cfg, setCfg] = useState(null), [msg, setMsg] = useState('')
   useEffect(() => { if (p && env === null) { setEnv(envToText(p.env)); setCfg({ port: p.port, branch: p.branch, domain: p.domain }) } }, [p, env])
@@ -239,10 +265,10 @@ function ProjectPage({ id }) {
       {tab === 'settings' && (
         <div className="max-w-xl space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Port interne"><input className={inp} type="number" value={cfg.port} onChange={e => setCfg({ ...cfg, port: e.target.value })} /></Field>
+            <Field label="Port de l’appli" hint="Celui sur lequel ton appli écoute"><input className={inp} type="number" value={cfg.port} onChange={e => setCfg({ ...cfg, port: e.target.value })} /></Field>
             {p.source === 'github' && <Field label="Branche"><input className={inp} value={cfg.branch} onChange={e => setCfg({ ...cfg, branch: e.target.value })} /></Field>}
           </div>
-          <Field label="Domaine"><input className={inp} placeholder="mon-site.mondomaine.fr" value={cfg.domain} onChange={e => setCfg({ ...cfg, domain: e.target.value })} /></Field>
+          <Field label="Adresse du site" hint={cfg.domain ? `https://${cfg.domain}` : undefined}><DomainField value={cfg.domain} onChange={d => setCfg({ ...cfg, domain: d })} base={conf.base} placeholder={conf.base ? 'mon-site' : 'mon-site.mondomaine.fr'} /></Field>
           <button className={btn} onClick={() => save(true).then(() => setTab('deploys'))}>Appliquer & redéployer</button>
           {p.caddy?.enabled
             ? (
