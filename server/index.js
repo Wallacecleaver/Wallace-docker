@@ -373,6 +373,20 @@ route('GET', '/api/deploys/:id/log', ({ req, res, params }) => {
   return STREAM
 })
 
+// Stats détaillées d'un projet (page du projet) : CPU, mémoire, réseau, uptime, redémarrages
+route('GET', '/api/projects/:id/stats', async ({ params }) => {
+  const [c] = await ctrs(getP(params.id).id)
+  if (!c) return { running: false }
+  const [s, i] = await Promise.all([
+    out('docker', ['stats', '--no-stream', '--format', '{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.PIDs}}', c]),
+    out('docker', ['inspect', '-f', '{{.State.Running}}|{{.State.StartedAt}}|{{.RestartCount}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}', c]),
+  ])
+  const [run, started, restarts, health] = i.split('|')
+  if (run !== 'true') return { running: false, restarts: +restarts || 0 }
+  const [cpu, mem = '', memp, net = '', pids] = s.split('|'), [used, limit] = mem.split(' / '), [rx, tx] = net.split(' / ')
+  return { running: true, cpu: parseFloat(cpu) || 0, memUsed: used, memLimit: limit, memPct: parseFloat(memp) || 0, rx, tx, pids: +pids || 0, started, restarts: +restarts || 0, health: health || '' }
+})
+
 const st = { t: 0, v: {} }
 route('GET', '/api/stats', async () => {
   if (Date.now() - st.t > 5000) {

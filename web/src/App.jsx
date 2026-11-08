@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Check, ChevronDown, Container, ExternalLink, GitBranch, Github, History, KeyRound, Lock, LogOut, Play, Plus, RefreshCw, Rocket, Search, Settings, Square, Terminal, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Activity, ArrowDown, ArrowDownUp, ArrowLeft, ArrowUp, Check, ChevronDown, CircleCheck, CircleX, Clock, Container, Copy, Cpu, ExternalLink, GitBranch, Github, Globe, Hash, HeartPulse, History, KeyRound, LoaderCircle, Lock, LogOut, MemoryStick, Play, Plus, RefreshCw, Rocket, Save, Search, Settings, ShieldCheck, Square, Terminal, Trash2, TriangleAlert } from 'lucide-react'
 
 // ---------- utils ----------
 const cx = (...a) => a.filter(Boolean).join(' ')
@@ -182,17 +182,52 @@ function GitHubBox({ gh, reload }) {
   )
 }
 
-function LogView({ url, h = 'h-96' }) {
-  const [t, setT] = useState(''), ref = useRef()
+const logCls = l => /^→/.test(l) ? 'text-accent-blue' : /^✓/.test(l) ? 'text-emerald-400' : /^✗|\b(error|failed|fatal)\b/i.test(l) ? 'text-red-400' : /^#\d+ (DONE|CACHED)|^\s*$/.test(l) ? 'text-zinc-600' : 'text-zinc-300'
+
+function CopyBtn({ text, label, className }) {
+  const [ok, setOk] = useState(false)
+  return (
+    <button type="button" title="Copier" onClick={() => { navigator.clipboard?.writeText(text); setOk(true); setTimeout(() => setOk(false), 1500) }}
+      className={cx('inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs text-zinc-400 transition-colors hover:border-zinc-600 hover:text-white', className)}>
+      {ok ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}{label}
+    </button>
+  )
+}
+
+function LogView({ url, h = 'h-[26rem]', title }) {
+  const [t, setT] = useState(''), [follow, setFollow] = useState(true), [done, setDone] = useState(false), ref = useRef()
   useEffect(() => {
-    setT('')
+    setT(''); setDone(false); setFollow(true)
     const es = new EventSource('/api' + url)
     es.onmessage = e => setT(p => (p + JSON.parse(e.data)).slice(-80000))
-    es.addEventListener('end', () => es.close())
+    es.addEventListener('end', () => { setDone(true); es.close() })
     return () => es.close()
   }, [url])
-  useEffect(() => { ref.current?.scrollTo(0, ref.current.scrollHeight) }, [t])
-  return <pre ref={ref} className={cx(h, 'overflow-auto whitespace-pre-wrap break-all rounded-xl border border-zinc-800 bg-black/60 p-4 font-mono text-xs leading-relaxed text-zinc-300')}>{t || '…'}</pre>
+  useEffect(() => { if (follow && ref.current) ref.current.scrollTop = ref.current.scrollHeight }, [t, follow])
+  const lines = useMemo(() => t.replace(/\n$/, '').split('\n'), [t])
+  const onScroll = e => { const el = e.currentTarget; setFollow(el.scrollHeight - el.scrollTop - el.clientHeight < 40) }
+  return (
+    <div className="overflow-hidden rounded-2xl border border-zinc-800 bg-black/60">
+      <div className="flex items-center justify-between gap-3 border-b border-zinc-800/80 bg-zinc-900/60 px-4 py-2.5">
+        <div className="flex min-w-0 items-center gap-3 text-xs text-zinc-400">
+          <span className="flex gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-zinc-700" /><i className="h-2.5 w-2.5 rounded-full bg-zinc-700" /><i className="h-2.5 w-2.5 rounded-full bg-zinc-700" /></span>
+          <span className="truncate font-medium text-zinc-300">{title}</span>
+          {!done ? <span className="flex items-center gap-1.5 text-emerald-400"><i className="pulse-dot h-1.5 w-1.5 rounded-full bg-emerald-400" />en direct</span> : <span className="text-zinc-600">terminé</span>}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {!follow && <button type="button" onClick={() => setFollow(true)} className="inline-flex items-center gap-1.5 rounded-lg border border-accent-blue/40 bg-accent-blue/10 px-2.5 py-1.5 text-xs text-accent-blue transition-colors hover:bg-accent-blue/20"><ArrowDown size={13} /> Suivre</button>}
+          <CopyBtn text={t} label="Copier" />
+        </div>
+      </div>
+      <div ref={ref} onScroll={onScroll} className={cx(h, 'overflow-auto p-4 font-mono text-xs leading-relaxed')}>
+        {!t && <p className="text-zinc-600">En attente des logs…</p>}
+        {t && lines.map((l, i) => {
+          const m = /^(\d{4}-\d\d-\d\dT(\d\d:\d\d:\d\d)\S*)\s(.*)$/.exec(l)
+          return <div key={i} className={cx('whitespace-pre-wrap break-all', logCls(m ? m[3] : l))}>{m && <span className="mr-3 select-none text-zinc-600">{m[2]}</span>}{m ? m[3] : l || ' '}</div>
+        })}
+      </div>
+    </div>
+  )
 }
 
 // ---------- pages ----------
@@ -351,98 +386,204 @@ function NewProject() {
 }
 
 const TABS = [['deploys', History, 'Déploiements'], ['logs', Terminal, 'Logs'], ['env', KeyRound, 'Variables'], ['settings', Settings, 'Paramètres']]
+const span = ms => { const s = Math.max(0, Math.round(ms / 1000)), d = (s / 86400) | 0, h = ((s % 86400) / 3600) | 0, m = ((s % 3600) / 60) | 0; return d ? `${d}j ${h}h` : h ? `${h}h ${m}m` : m ? `${m}m ${s % 60}s` : `${s}s` }
+
+function useStats(id) {
+  const [s, setS] = useState(null), [h, setH] = useState({ cpu: [], mem: [] })
+  useEffect(() => {
+    let dead = false
+    const load = () => api(`/projects/${id}/stats`).then(r => {
+      if (dead) return
+      setS(r)
+      if (r.running) setH(o => ({ cpu: [...o.cpu, r.cpu].slice(-30), mem: [...o.mem, r.memPct].slice(-30) }))
+    }).catch(() => {})
+    load(); const t = setInterval(load, 4000)
+    return () => { dead = true; clearInterval(t) }
+  }, [id])
+  return [s, h]
+}
+
+function Spark({ data, color, id }) {
+  const W = 120, H = 36, N = 30
+  if (data.length < 2) return <div className="h-9" />
+  const max = Math.max(...data, 1) * 1.25
+  const pts = data.map((v, i) => [W - (data.length - 1 - i) * (W / (N - 1)), H - 2 - (v / max) * (H - 6)])
+  const line = pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`).join(' ')
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="h-9 w-full">
+      <defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={color} stopOpacity=".35" /><stop offset="1" stopColor={color} stopOpacity="0" /></linearGradient></defs>
+      <path d={`${line} L${pts.at(-1)[0].toFixed(1)} ${H} L${pts[0][0].toFixed(1)} ${H} Z`} fill={`url(#${id})`} />
+      <path d={line} fill="none" stroke={color} strokeWidth="1.6" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+    </svg>
+  )
+}
+
+function StatCard({ icon: I, label, value, sub, children }) {
+  return (
+    <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
+      <div className="mb-2.5 flex items-center justify-between text-xs text-zinc-500">
+        <span className="flex items-center gap-2"><I size={14} />{label}</span>{sub && <span className="truncate pl-2 text-zinc-600">{sub}</span>}
+      </div>
+      <p className="truncate font-display text-2xl font-semibold text-white">{value}</p>
+      {children}
+    </div>
+  )
+}
+
+function StatusPill({ s }) {
+  const [c, l] = ST[s] || ST.idle
+  return <span className="inline-flex items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900/70 px-3 py-1 text-xs text-zinc-300"><i className={cx('h-2 w-2 rounded-full', c)} />{l}</span>
+}
+
+function Chip({ icon: I, href, children }) {
+  const c = 'inline-flex max-w-full items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/50 px-2.5 py-1 text-xs text-zinc-400'
+  const body = <><I size={13} className="shrink-0" /><span className="truncate">{children}</span></>
+  return href ? <a href={href} target="_blank" rel="noopener noreferrer" className={cx(c, 'transition-colors hover:border-zinc-600 hover:text-white')}>{body}</a> : <span className={c}>{body}</span>
+}
+
+function Card({ title, desc, children, tone }) {
+  return (
+    <section className={cx('rounded-2xl border p-5', tone === 'danger' ? 'border-red-900/40 bg-red-950/10' : 'border-zinc-800 bg-zinc-900/40')}>
+      <h3 className={cx('text-sm font-semibold', tone === 'danger' ? 'text-red-300' : 'text-white')}>{title}</h3>
+      {desc && <p className="mt-1 mb-4 text-xs text-zinc-500">{desc}</p>}
+      {!desc && <div className="mb-4" />}
+      {children}
+    </section>
+  )
+}
 
 function ProjectPage({ id }) {
-  const conf = useConfig()
+  const conf = useConfig(), [stats, hist] = useStats(id)
   const [p, reload] = usePoll(`/projects/${id}`, 3000)
-  const [tab, setTab] = useState('deploys'), [sel, setSel] = useState(null), [env, setEnv] = useState(null), [cfg, setCfg] = useState(null), [msg, setMsg] = useState('')
-  useEffect(() => { if (p && env === null) { setEnv(envToText(p.env)); setCfg({ port: p.port, branch: p.branch, domain: p.domain }) } }, [p, env])
+  const [tab, setTab] = useState('deploys'), [sel, setSel] = useState(null), [env, setEnv] = useState(null), [base, setBase] = useState(''), [cfg, setCfg] = useState(null), [msg, setMsg] = useState('')
+  const [, tick] = useState(0)
+  useEffect(() => { const t = setInterval(() => tick(n => n + 1), 1000); return () => clearInterval(t) }, [])
+  useEffect(() => { if (p && env === null) { const e = envToText(p.env); setEnv(e); setBase(e); setCfg({ port: p.port, branch: p.branch, domain: p.domain }) } }, [p, env])
   if (!p || env === null) return null
-  const act = async (path, opts = { method: 'POST' }, then) => { try { setMsg(''); await api(`/projects/${id}${path}`, opts); then?.() } catch (x) { setMsg(x.message) } reload() }
+  const act = async (path, opts = { method: 'POST' }, then) => { let ok = true; try { setMsg(''); await api(`/projects/${id}${path}`, opts); then?.() } catch (x) { ok = false; setMsg(x.message) } reload(); return ok }
   const live = sel ?? p.deploys[0]?.id
   const hook = `${location.origin}/api/hooks/${id}/${p.hook}`
-  const save = redeploy => act('', { method: 'PATCH', body: { ...cfg, env: textToEnv(env), redeploy } })
+  const save = async redeploy => { const ok = await act('', { method: 'PATCH', body: { ...cfg, env: textToEnv(env), redeploy } }); if (ok) setBase(env); return ok }
+  const nVars = Object.keys(textToEnv(env)).length, dirty = env !== base
+  const run = stats?.running, last = p.deploys[0], firstOk = p.deploys.find(d => d.status === 'success')?.id
+  const memPct = Math.min(100, stats?.memPct || 0)
 
   return (
     <div className="fade-up">
       <a href="#/" className="mb-6 inline-flex items-center gap-2 text-sm text-zinc-500 hover:text-white"><ArrowLeft size={15} /> Projets</a>
-      <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="font-display text-4xl font-bold">{p.name}</h1>
-          <div className="mt-2 flex flex-wrap items-center gap-4">
-            <Badge s={p.status} />
-            {p.domain
-              ? <a href={p.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-sm text-accent-blue hover:underline">{p.domain} <ExternalLink size={13} /></a>
-              : <span className="text-sm text-zinc-500">localhost:{p.hostport}</span>}
+
+      <div className="mb-8 flex flex-wrap items-start justify-between gap-5">
+        <div className="flex min-w-0 items-center gap-4">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-brand font-display text-2xl font-bold text-white shadow-lg shadow-accent-blue/20">{p.name[0]?.toUpperCase()}</div>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-3"><h1 className="truncate font-display text-3xl font-bold sm:text-4xl">{p.name}</h1><StatusPill s={p.status} /></div>
+            <div className="mt-2.5 flex flex-wrap items-center gap-2">
+              {p.domain && <Chip icon={Globe} href={p.url}>{p.domain}</Chip>}
+              {p.source === 'github' ? <><Chip icon={Github} href={`https://github.com/${p.repo}`}>{p.repo}</Chip><Chip icon={GitBranch}>{p.branch}</Chip></> : <Chip icon={Container}>{p.image}</Chip>}
+              <Chip icon={Hash}>port {p.port}</Chip>
+            </div>
           </div>
         </div>
-        <div className="flex gap-2">
-          <button className={btnPrimary} disabled={p.status === 'building'} onClick={() => act('/deploy', { method: 'POST' }, () => { setSel(null); setTab('deploys') })}><RefreshCw size={15} /> Redéployer</button>
+        <div className="flex flex-wrap gap-2">
+          {p.domain && <a href={p.url} target="_blank" rel="noopener noreferrer" className={btn}><ExternalLink size={15} /> Ouvrir</a>}
           {p.status === 'running'
             ? <button className={btn} onClick={() => act('/stop')}><Square size={14} /> Stop</button>
             : p.status !== 'building' && <button className={btn} onClick={() => act('/start')}><Play size={14} /> Start</button>}
+          <button className={btnPrimary} disabled={p.status === 'building'} onClick={() => act('/deploy', { method: 'POST' }, () => { setSel(null); setTab('deploys') })}><RefreshCw size={15} className={p.status === 'building' ? 'animate-spin' : ''} /> Redéployer</button>
         </div>
       </div>
 
-      <div className="mb-6 flex gap-1 overflow-x-auto border-b border-zinc-800/60">
+      <div className="mb-8 grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatCard icon={Cpu} label="CPU" value={run ? `${stats.cpu.toFixed(1)} %` : '—'}>
+          {run ? <div className="mt-2"><Spark data={hist.cpu} color="#2e9bfb" id="sp-cpu" /></div> : <p className="mt-2 text-xs text-zinc-600">Conteneur arrêté</p>}
+        </StatCard>
+        <StatCard icon={MemoryStick} label="Mémoire" value={run ? stats.memUsed : '—'} sub={run ? `/ ${stats.memLimit}` : ''}>
+          {run ? <>
+            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-zinc-800"><div className="h-full rounded-full bg-brand transition-all duration-700" style={{ width: `${Math.max(2, memPct)}%` }} /></div>
+            <div className="mt-1.5 flex justify-between text-[11px] text-zinc-600"><span>{stats.memPct.toFixed(1)} % utilisé</span><span>{stats.pids} processus</span></div>
+          </> : <p className="mt-2 text-xs text-zinc-600">Conteneur arrêté</p>}
+        </StatCard>
+        <StatCard icon={ArrowDownUp} label="Réseau" value={run ? stats.rx : '—'} sub={run ? 'reçu' : ''}>
+          {run ? <p className="mt-3 flex items-center gap-1.5 text-xs text-zinc-500"><ArrowUp size={12} className="text-accent-purple" /> {stats.tx} envoyés depuis le démarrage</p> : <p className="mt-2 text-xs text-zinc-600">Conteneur arrêté</p>}
+        </StatCard>
+        <StatCard icon={Activity} label="Disponibilité" value={run && stats.started ? span(Date.now() - new Date(stats.started).getTime()) : '—'} sub={run ? 'en ligne' : ''}>
+          <div className="mt-3 space-y-1 text-xs text-zinc-500">
+            <p className="flex items-center gap-1.5"><RefreshCw size={12} /> {stats?.restarts ?? 0} redémarrage{stats?.restarts > 1 ? 's' : ''}{stats?.health === 'healthy' && <span className="ml-1 inline-flex items-center gap-1 text-emerald-400"><HeartPulse size={12} /> sain</span>}{stats?.health === 'unhealthy' && <span className="ml-1 inline-flex items-center gap-1 text-red-400"><HeartPulse size={12} /> défaillant</span>}</p>
+            {last && <p className="flex items-center gap-1.5"><Clock size={12} /> déployé il y a {ago(last.created)}{last.finished ? ` · ${span(last.finished - last.created)}` : ''}</p>}
+          </div>
+        </StatCard>
+      </div>
+
+      <div className="mb-6 inline-flex max-w-full gap-1 overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/50 p-1">
         {TABS.map(([k, I, l]) => (
-          <button key={k} onClick={() => setTab(k)} className={cx('flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-2.5 text-sm transition-colors', tab === k ? 'border-accent-blue text-white' : 'border-transparent text-zinc-500 hover:text-zinc-300')}><I size={15} /> {l}</button>
+          <button key={k} onClick={() => setTab(k)} className={cx('flex items-center gap-2 whitespace-nowrap rounded-lg px-4 py-2 text-sm transition-all', tab === k ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300')}>
+            <I size={15} /> {l}{k === 'env' && nVars > 0 && <span className="rounded-full bg-zinc-700/70 px-1.5 text-[10px] text-zinc-300">{nVars}</span>}
+          </button>
         ))}
       </div>
-      {msg && <p className="mb-4 text-sm text-red-400">{msg}</p>}
+      {msg && <p className="mb-4 rounded-xl border border-red-900/50 bg-red-950/30 px-4 py-3 text-sm text-red-300">{msg}</p>}
 
       {tab === 'deploys' && (
-        <div className="grid gap-5 lg:grid-cols-[16rem_1fr]">
-          <div className="space-y-1.5">
+        <div className="grid gap-5 lg:grid-cols-[17rem_1fr]">
+          <div className="space-y-2">
             {!p.deploys.length && <p className="text-sm text-zinc-600">Aucun déploiement.</p>}
-            {p.deploys.map(d => (
-              <button key={d.id} onClick={() => setSel(d.id)} className={cx('flex w-full items-center justify-between rounded-xl border px-3.5 py-2.5 text-sm transition-colors', live === d.id ? 'border-zinc-600 bg-zinc-800/60 text-white' : 'border-zinc-800 text-zinc-400 hover:border-zinc-700')}>
-                <span>#{d.id}</span>
-                <span className="flex items-center gap-2 text-xs"><i className={cx('h-2 w-2 rounded-full', d.status === 'success' ? 'bg-emerald-400' : d.status === 'failed' ? 'bg-red-400' : 'bg-amber-400 pulse-dot')} />{ago(d.created)}</span>
-              </button>
-            ))}
+            {p.deploys.map(d => {
+              const I = d.status === 'success' ? CircleCheck : d.status === 'failed' ? CircleX : LoaderCircle
+              return (
+                <button key={d.id} onClick={() => setSel(d.id)} className={cx('flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left transition-all', live === d.id ? 'border-zinc-600 bg-zinc-800/60' : 'border-zinc-800 bg-zinc-900/30 hover:border-zinc-700')}>
+                  <I size={18} className={cx('shrink-0', d.status === 'success' ? 'text-emerald-400' : d.status === 'failed' ? 'text-red-400' : 'animate-spin text-amber-400')} />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2 text-sm text-white">#{d.id}{d.id === firstOk && p.status === 'running' && <span className="rounded-full bg-emerald-400/10 px-2 py-0.5 text-[10px] font-medium text-emerald-300">actif</span>}</span>
+                    <span className="block text-xs text-zinc-500">il y a {ago(d.created)}{d.finished ? ` · ${span(d.finished - d.created)}` : ' · en cours'}</span>
+                  </span>
+                </button>
+              )
+            })}
           </div>
-          {live && <LogView key={live} url={`/deploys/${live}/log`} />}
+          {live && <LogView key={live} url={`/deploys/${live}/log`} title={`Déploiement #${live}`} />}
         </div>
       )}
-      {tab === 'logs' && <LogView url={`/projects/${id}/logs`} h="h-[28rem]" />}
+      {tab === 'logs' && <LogView url={`/projects/${id}/logs`} h="h-[32rem]" title={`Logs du conteneur · ${p.name}`} />}
       {tab === 'env' && (
-        <div className="max-w-2xl">
-          <textarea className={cx(inp, 'h-72 font-mono text-xs')} placeholder="CLE=valeur" value={env} onChange={e => setEnv(e.target.value)} />
-          <div className="mt-4 flex gap-2">
-            <button className={btn} onClick={() => save(false)}>Enregistrer</button>
-            <button className={btnPrimary} onClick={() => save(true).then(() => setTab('deploys'))}>Enregistrer & redéployer</button>
-          </div>
+        <div className="max-w-3xl">
+          <Card title="Variables d’environnement" desc="Une par ligne : CLE=valeur. Elles sont transmises au conteneur ; le port (PORT) est ajouté automatiquement. Un redéploiement est nécessaire pour les appliquer.">
+            <textarea spellCheck={false} className={cx(inp, 'h-80 font-mono text-xs leading-relaxed')} placeholder="CLE=valeur" value={env} onChange={e => setEnv(e.target.value)} />
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <button className={btn} disabled={!dirty} onClick={() => save(false)}><Save size={14} /> Enregistrer</button>
+              <button className={btnPrimary} onClick={() => save(true).then(ok => ok && setTab('deploys'))}><Rocket size={15} /> Enregistrer & redéployer</button>
+              {dirty && <span className="flex items-center gap-1.5 text-xs text-amber-300"><i className="pulse-dot h-1.5 w-1.5 rounded-full bg-amber-400" />modifications non enregistrées</span>}
+            </div>
+          </Card>
         </div>
       )}
       {tab === 'settings' && (
-        <div className="max-w-xl space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Port de l’addon" hint="Celui sur lequel ton addon écoute"><input className={inp} type="number" value={cfg.port} onChange={e => setCfg({ ...cfg, port: e.target.value })} /></Field>
-            {p.source === 'github' && <Field label="Branche"><input className={inp} value={cfg.branch} onChange={e => setCfg({ ...cfg, branch: e.target.value })} /></Field>}
-          </div>
-          <Field label="Adresse de l’addon" hint={cfg.domain ? `https://${cfg.domain}` : undefined}><DomainField value={cfg.domain} onChange={d => setCfg({ ...cfg, domain: d })} suffix={conf.suffix} placeholder="mon-addon" /><DnsStatus domain={cfg.domain} ip={conf.ip} /></Field>
-          <button className={btn} onClick={() => save(true).then(() => setTab('deploys'))}>Appliquer & redéployer</button>
-          {p.caddy?.enabled
-            ? (
-              <Field label="Caddy" hint="Le Caddyfile est mis à jour et rechargé automatiquement quand tu appliques.">
-                <div className={cx('rounded-xl border p-4 text-xs leading-relaxed', p.caddy.error ? 'border-red-500/40 bg-red-500/10 text-red-300' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300')}>
-                  {p.caddy.error ? <pre className="whitespace-pre-wrap font-mono">{p.caddy.error}</pre> : 'Géré automatiquement ✓'}
-                </div>
-              </Field>
-            )
-            : (
-              <Field label="À ajouter dans ton Caddyfile" hint="Puis : docker exec -w /etc/caddy caddy caddy reload">
-                <pre onClick={e => navigator.clipboard?.writeText(e.currentTarget.textContent)} title="Cliquer pour copier" className="cursor-pointer rounded-xl border border-zinc-800 bg-black/60 p-4 font-mono text-xs leading-relaxed text-zinc-300">{`${cfg.domain || 'mon-site.mondomaine.fr'} {\n    reverse_proxy localhost:${p.hostport}\n}`}</pre>
-              </Field>
-            )}
+        <div className="grid max-w-4xl gap-5 lg:grid-cols-2">
+          <Card title="Général" desc="Port sur lequel écoute ton addon dans le conteneur.">
+            <div className="space-y-4">
+              <Field label="Port de l’addon"><input className={inp} type="number" value={cfg.port} onChange={e => setCfg({ ...cfg, port: e.target.value })} /></Field>
+              {p.source === 'github' && <Field label="Branche"><input className={inp} value={cfg.branch} onChange={e => setCfg({ ...cfg, branch: e.target.value })} /></Field>}
+            </div>
+          </Card>
+          <Card title="Adresse" desc="Le nom de domaine qui pointe vers ton addon.">
+            <Field label="Adresse de l’addon" hint={cfg.domain ? `https://${cfg.domain}` : undefined}><DomainField value={cfg.domain} onChange={d => setCfg({ ...cfg, domain: d })} suffix={conf.suffix} placeholder="mon-addon" /><DnsStatus domain={cfg.domain} ip={conf.ip} /></Field>
+          </Card>
+          <div className="lg:col-span-2"><button className={btnPrimary} onClick={() => save(true).then(ok => ok && setTab('deploys'))}><Rocket size={15} /> Appliquer & redéployer</button></div>
+          <Card title="Caddy" desc={p.caddy?.enabled ? 'Le Caddyfile est mis à jour et rechargé automatiquement quand tu appliques.' : 'À ajouter dans ton Caddyfile, puis : docker exec -w /etc/caddy caddy caddy reload'}>
+            {p.caddy?.enabled
+              ? <div className={cx('flex items-start gap-2.5 rounded-xl border p-3.5 text-xs leading-relaxed', p.caddy.error ? 'border-red-500/40 bg-red-500/10 text-red-300' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300')}>
+                {p.caddy.error ? <><TriangleAlert size={15} className="mt-0.5 shrink-0" /><pre className="whitespace-pre-wrap font-mono">{p.caddy.error}</pre></> : <><ShieldCheck size={15} className="shrink-0" /> Géré automatiquement</>}
+              </div>
+              : <pre onClick={e => navigator.clipboard?.writeText(e.currentTarget.textContent)} title="Cliquer pour copier" className="cursor-pointer rounded-xl border border-zinc-800 bg-black/60 p-4 font-mono text-xs leading-relaxed text-zinc-300">{`${cfg.domain || 'mon-site.mondomaine.fr'} {\n    reverse_proxy localhost:${p.hostport}\n}`}</pre>}
+          </Card>
           {p.source === 'github' && (
-            <Field label="Webhook GitHub (push → redéploiement)" hint="Repo → Settings → Webhooks → content type application/json">
-              <input readOnly className={cx(inp, 'font-mono text-xs')} value={hook} onFocus={e => e.target.select()} />
-            </Field>
+            <Card title="Webhook GitHub" desc="Redéploie à chaque push. Repo → Settings → Webhooks → content type application/json.">
+              <div className="flex gap-2"><input readOnly className={cx(inp, 'min-w-0 font-mono text-xs')} value={hook} onFocus={e => e.target.select()} /><CopyBtn text={hook} className="shrink-0 px-3" /></div>
+            </Card>
           )}
-          <div className="border-t border-zinc-800/60 pt-6">
-            <button className="inline-flex items-center gap-2 rounded-xl border border-red-900/60 px-4 py-2 text-sm text-red-400 transition-colors hover:bg-red-950/40" onClick={() => confirm(`Supprimer ${p.name} ?`) && act('', { method: 'DELETE' }, () => (location.hash = '/'))}><Trash2 size={15} /> Supprimer le projet</button>
+          <div className="lg:col-span-2">
+            <Card tone="danger" title="Zone dangereuse" desc="Supprime le projet, ses conteneurs, ses images et ses volumes de données. Cette action est définitive.">
+              <button className="inline-flex items-center gap-2 rounded-xl border border-red-900/60 px-4 py-2 text-sm text-red-400 transition-colors hover:bg-red-950/40" onClick={() => confirm(`Supprimer ${p.name} et toutes ses données ?`) && act('', { method: 'DELETE' }, () => (location.hash = '/'))}><Trash2 size={15} /> Supprimer le projet</button>
+            </Card>
           </div>
         </div>
       )}
