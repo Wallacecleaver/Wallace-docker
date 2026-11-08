@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Container, ExternalLink, GitBranch, Github, History, KeyRound, LogOut, Play, Plus, RefreshCw, Rocket, Settings, Square, Terminal, Trash2 } from 'lucide-react'
+import { ArrowLeft, Check, ChevronDown, Container, ExternalLink, GitBranch, Github, History, KeyRound, Lock, LogOut, Play, Plus, RefreshCw, Rocket, Search, Settings, Square, Terminal, Trash2 } from 'lucide-react'
 
 // ---------- utils ----------
 const cx = (...a) => a.filter(Boolean).join(' ')
@@ -62,6 +62,58 @@ function Badge({ s }) {
 
 function Field({ label, children, hint }) {
   return <label className="block"><span className="mb-1.5 block text-xs font-medium text-zinc-400">{label}</span>{children}{hint && <span className="mt-1 block text-xs text-zinc-600">{hint}</span>}</label>
+}
+
+function RepoPicker({ value, onPick, repos, placeholder }) {
+  const [open, setOpen] = useState(false), [hi, setHi] = useState(0), box = useRef(null), list = useRef(null)
+  useEffect(() => {
+    const f = e => { if (box.current && !box.current.contains(e.target)) setOpen(false) }
+    addEventListener('mousedown', f); return () => removeEventListener('mousedown', f)
+  }, [])
+  const q = value.trim().toLowerCase(), exact = repos.some(r => r.name === value)
+  const items = !q || exact ? repos : repos.filter(r => r.name.toLowerCase().includes(q))
+  useEffect(() => { setHi(0) }, [value])
+  useEffect(() => { list.current?.children[hi]?.scrollIntoView({ block: 'nearest' }) }, [hi, open])
+  const pick = r => { onPick(r.name); setOpen(false) }
+  const onKey = e => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setHi(i => Math.min(i + 1, items.length - 1)) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setHi(i => Math.max(i - 1, 0)) }
+    else if (e.key === 'Enter' && open && items[hi]) { e.preventDefault(); pick(items[hi]) }
+    else if (e.key === 'Escape') setOpen(false)
+  }
+  const has = repos.length > 0
+  return (
+    <div ref={box} className="relative">
+      <div className={cx('flex items-center gap-2 rounded-xl border bg-zinc-900/70 px-3.5 transition-colors', open ? 'border-accent-blue/60' : 'border-zinc-800')}>
+        <Search size={15} className="shrink-0 text-zinc-600" />
+        <input className="min-w-0 flex-1 bg-transparent py-2.5 text-sm text-white outline-none placeholder:text-zinc-600" required placeholder={placeholder} value={value} autoComplete="off" spellCheck={false}
+          onChange={e => { onPick(e.target.value); setOpen(true) }} onFocus={() => setOpen(true)} onKeyDown={onKey} />
+        {has && <button type="button" tabIndex={-1} onClick={() => setOpen(o => !o)} className="shrink-0 text-zinc-500 transition-colors hover:text-white"><ChevronDown size={16} className={cx('transition-transform duration-200', open && 'rotate-180')} /></button>}
+      </div>
+      {open && has && (
+        <div className="fade-up absolute left-0 right-0 z-30 mt-2 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/95 shadow-2xl shadow-black/60 backdrop-blur-xl">
+          <div className="flex items-center justify-between border-b border-zinc-800/80 px-3.5 py-2 text-[11px] uppercase tracking-wider text-zinc-600">
+            <span>Tes repos</span><span>{items.length}/{repos.length}</span>
+          </div>
+          <div ref={list} className="max-h-72 overflow-y-auto p-1.5">
+            {items.length === 0 && <p className="px-3 py-6 text-center text-sm text-zinc-600">Aucun repo ne correspond — tu peux coller un lien.</p>}
+            {items.map((r, i) => {
+              const [owner, name] = r.name.split('/'), sel = r.name === value
+              return (
+                <button type="button" key={r.name} onMouseEnter={() => setHi(i)} onClick={() => pick(r)}
+                  className={cx('flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors', i === hi ? 'bg-zinc-800/80' : '')}>
+                  <span className={cx('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', r.private ? 'bg-amber-400/10 text-amber-300' : 'bg-zinc-800 text-zinc-400')}>{r.private ? <Lock size={14} /> : <Github size={14} />}</span>
+                  <span className="min-w-0 flex-1 truncate text-sm"><span className="text-zinc-500">{owner}/</span><span className="font-medium text-white">{name}</span></span>
+                  <span className={cx('shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium', r.private ? 'bg-amber-400/10 text-amber-300' : 'bg-emerald-400/10 text-emerald-300')}>{r.private ? 'privé' : 'public'}</span>
+                  {sel && <Check size={15} className="shrink-0 text-accent-blue" />}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function DomainField({ value, onChange, suffix, placeholder }) {
@@ -246,10 +298,11 @@ function NewProject() {
         {src === 'github' ? (
           <>
             {gh && !gh.connected && <GitHubBox gh={gh} reload={loadGh} />}
-            <Field label="Repo GitHub" hint={gh?.connected ? `Choisis dans la liste ou colle un lien · connecté : @${gh.login}` : 'Colle le lien du repo ou écris proprietaire/repo'}>
-              <input className={inp} required list="wd-repos" placeholder="Wallacecleaver/mon-repo" value={f.repo} onChange={onRepo} />
-              <datalist id="wd-repos">{repos.map(r => <option key={r.name} value={r.name}>{r.private ? 'privé' : 'public'}</option>)}</datalist>
-            </Field>
+            <div>
+              <span className="mb-1.5 block text-xs font-medium text-zinc-400">Repo GitHub</span>
+              <RepoPicker value={f.repo} repos={repos} placeholder="Wallacecleaver/mon-repo" onPick={v => onRepo({ target: { value: v } })} />
+              <span className="mt-1 block text-xs text-zinc-600">{gh?.connected ? `Cherche, choisis dans la liste ou colle un lien · connecté : @${gh.login}` : 'Colle le lien du repo ou écris proprietaire/repo'}</span>
+            </div>
             {gh?.connected && <button type="button" className="text-xs text-zinc-500 underline hover:text-white" onClick={() => api('/github', { method: 'DELETE' }).then(() => { setRepos([]); loadGh() })}>Déconnecter GitHub</button>}
           </>
         ) : (
