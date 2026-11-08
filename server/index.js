@@ -340,14 +340,15 @@ route('GET', '/api/github/env', async ({ req }) => {
 })
 
 route('GET', '/api/projects', async () => {
-  const state = {}
-  for (const l of lines(await out('docker', ['ps', '-a', '--format', '{{.State}}|{{.Label "shipyard.project"}}']))) {
-    const [s, id] = l.split('|'); if (id && !(id in state)) state[id] = s
+  const state = {}, health = {}
+  for (const l of lines(await out('docker', ['ps', '-a', '--format', '{{.State}}|{{.Label "shipyard.project"}}|{{.Status}}']))) {
+    const [s, id, txt = ''] = l.split('|')
+    if (id && !(id in state)) { state[id] = s; health[id] = /\((healthy|unhealthy|health: starting)\)/.exec(txt)?.[1]?.replace('health: ', '') || '' }
   }
   return db.prepare('select * from projects order by created desc').all().map(r => {
     const p = row(r), last = db.prepare('select status,created from deploys where project=? order by id desc limit 1').get(p.id)
     const { env, hook, ...pub } = p
-    return { ...pub, url: urlOf(p), status: deploying.has(p.id) ? 'building' : state[p.id] || 'idle', last }
+    return { ...pub, url: urlOf(p), status: deploying.has(p.id) ? 'building' : state[p.id] || 'idle', health: health[p.id] || '', last }
   })
 })
 

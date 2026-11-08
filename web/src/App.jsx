@@ -54,7 +54,7 @@ const inp = 'w-full rounded-xl border border-zinc-800 bg-zinc-900/70 px-4 py-2.5
 const btn = 'inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-2 text-sm text-zinc-300 transition-all hover:border-zinc-600 hover:text-white disabled:opacity-50'
 const btnPrimary = 'inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-5 py-2.5 text-sm font-medium text-white transition-all hover:shadow-lg hover:shadow-accent-blue/25 disabled:opacity-50'
 
-const ST = { running: ['bg-emerald-400', 'En ligne'], building: ['bg-amber-400 pulse-dot', 'Build en cours'], exited: ['bg-zinc-500', 'Arrêté'], created: ['bg-zinc-500', 'Arrêté'], idle: ['bg-zinc-600', 'Inactif'], restarting: ['bg-red-400 pulse-dot', 'Crash / redémarre'], dead: ['bg-red-400', 'Erreur'] }
+const ST = { running: ['bg-emerald-400', 'En ligne'], unhealthy: ['bg-red-400 pulse-dot', 'Défaillant'], starting: ['bg-amber-400 pulse-dot', 'Démarrage'], building: ['bg-amber-400 pulse-dot', 'Build en cours'], exited: ['bg-zinc-500', 'Arrêté'], created: ['bg-zinc-500', 'Arrêté'], idle: ['bg-zinc-600', 'Inactif'], restarting: ['bg-red-400 pulse-dot', 'Crash / redémarre'], dead: ['bg-red-400', 'Erreur'] }
 function Badge({ s }) {
   const [c, l] = ST[s] || ST.idle
   return <span className="inline-flex items-center gap-2 text-xs text-zinc-400"><i className={cx('h-2 w-2 rounded-full', c)} />{l}</span>
@@ -253,9 +253,55 @@ function Login({ onOk }) {
   )
 }
 
+// « 12.43MiB » / « 1.2GiB » → Mio ; puis affichage lisible
+const toMiB = s => { const m = /([\d.]+)\s*([KMGT]?i?B)/i.exec(s || ''); if (!m) return 0; const u = m[2].toUpperCase(); return +m[1] * ({ B: 1 / 1048576, KIB: 1 / 1024, KB: 1 / 1024, MIB: 1, MB: 1, GIB: 1024, GB: 1024, TIB: 1048576, TB: 1048576 }[u] || 0) }
+const fmtMiB = v => v >= 1024 ? `${(v / 1024).toFixed(1)} Gio` : `${v < 10 ? v.toFixed(1) : Math.round(v)} Mio`
+// L'état affiché tient compte du test de santé : « En ligne » ne ment plus quand le HEALTHCHECK échoue
+const shownState = p => p.status === 'running' && (p.health === 'unhealthy' || p.health === 'starting') ? p.health : p.status
+const BAD = ['unhealthy', 'restarting', 'dead']
+
+function ProjectCard({ p, stat }) {
+  const st = shownState(p), host = p.url.replace(/^https?:\/\//, ''), live = p.status === 'running'
+  const failed = p.last?.status === 'failed' && p.status !== 'building'
+  return (
+    <div className="group relative overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5 transition-all duration-300 hover:-translate-y-1 hover:border-zinc-700 hover:shadow-xl hover:shadow-black/30">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-accent-blue/[0.08] to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+      {/* lien étiré : toute la carte ouvre le projet, sauf l'adresse du site qui a son propre lien */}
+      <a href={`#/p/${p.id}`} className="absolute inset-0 rounded-2xl" aria-label={`Ouvrir ${p.name}`} />
+      <div className="pointer-events-none relative">
+        <div className="mb-2.5 flex items-start justify-between gap-3">
+          <h3 className="truncate font-display text-lg font-semibold text-white">{p.name}</h3>
+          <span className={cx('shrink-0 rounded-full border px-2.5 py-0.5', BAD.includes(st) ? 'border-red-900/60 bg-red-950/30' : 'border-zinc-800 bg-zinc-950/40')}><Badge s={st} /></span>
+        </div>
+        <p className="flex items-center gap-2 truncate text-sm text-zinc-400">
+          {p.source === 'github' ? <><Github size={14} className="shrink-0 text-zinc-500" /> {p.repo}<span className="text-zinc-700">·</span><GitBranch size={13} className="shrink-0 text-zinc-500" />{p.branch}</> : <><Container size={14} className="shrink-0 text-zinc-500" /> {p.image}</>}
+        </p>
+      </div>
+      <div className="pointer-events-none relative mt-4 border-t border-zinc-800/70 pt-3.5">
+        {p.domain
+          ? <a href={p.url} target="_blank" rel="noopener noreferrer" className="pointer-events-auto relative inline-flex max-w-full items-center gap-1.5 text-sm text-zinc-300 transition-colors hover:text-accent-blue"><Globe size={14} className="shrink-0 text-zinc-500" /><span className="truncate">{host}</span><ExternalLink size={12} className="shrink-0 opacity-60" /></a>
+          : <span className="inline-flex max-w-full items-center gap-1.5 text-sm text-zinc-400"><Globe size={14} className="shrink-0 text-zinc-500" /><span className="truncate">{host}</span></span>}
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {live && stat && <><Chip icon={Cpu}>{(parseFloat(stat.cpu) || 0).toFixed(1)} %</Chip><Chip icon={MemoryStick}>{fmtMiB(toMiB(stat.mem))}</Chip></>}
+          {failed
+            ? <span className="inline-flex items-center gap-1.5 rounded-lg border border-red-900/50 bg-red-950/30 px-2.5 py-1 text-xs text-red-300"><CircleX size={13} /> Dernier déploiement échoué</span>
+            : p.last && <Chip icon={Clock}>il y a {ago(p.last.created)}</Chip>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Dashboard() {
   const [ps] = usePoll('/projects', 4000), [stats] = usePoll('/stats', 10000)
-  if (!ps) return null
+  if (!ps) return (
+    <div>
+      <div className="mb-8"><div className="h-10 w-40 animate-pulse rounded-lg bg-zinc-900 motion-reduce:animate-none" /><div className="mt-3 h-4 w-24 animate-pulse rounded bg-zinc-900/70 motion-reduce:animate-none" /></div>
+      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">{[0, 1, 2].map(i => <div key={i} className="h-[190px] animate-pulse rounded-2xl border border-zinc-800/70 bg-zinc-900/40 motion-reduce:animate-none" />)}</div>
+    </div>
+  )
+  const up = ps.filter(p => p.status === 'running'), bad = ps.filter(p => BAD.includes(shownState(p))).length
+  const cpu = up.reduce((a, p) => a + (parseFloat(stats?.[p.id]?.cpu) || 0), 0), mem = up.reduce((a, p) => a + toMiB(stats?.[p.id]?.mem), 0)
   return (
     <div className="fade-up">
       <div className="mb-8 flex items-end justify-between">
@@ -270,23 +316,24 @@ function Dashboard() {
           <Rocket size={28} /> Déploie ton premier projet
         </a>
       ) : (
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {ps.map(p => (
-            <a key={p.id} href={`#/p/${p.id}`} className="group rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5 transition-all duration-300 hover:-translate-y-1 hover:border-zinc-700">
-              <div className="mb-3 flex items-start justify-between gap-3">
-                <h3 className="truncate font-display text-lg font-semibold text-white">{p.name}</h3>
-                <Badge s={p.status} />
-              </div>
-              <p className="mb-4 flex items-center gap-2 truncate text-sm text-zinc-500">
-                {p.source === 'github' ? <><Github size={14} className="shrink-0" /> {p.repo}<span className="text-zinc-700">·</span><GitBranch size={13} className="shrink-0" />{p.branch}</> : <><Container size={14} className="shrink-0" /> {p.image}</>}
-              </p>
-              <div className="flex items-center justify-between text-xs text-zinc-600">
-                <span className="truncate">{p.url.replace(/^https?:\/\//, '')}</span>
-                <span className="shrink-0">{stats?.[p.id] ? `${stats[p.id].cpu} · ${stats[p.id].mem}` : p.last ? `il y a ${ago(p.last.created)}` : ''}</span>
-              </div>
+        <>
+          <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-3">
+            <div className="col-span-2 sm:col-span-1">
+              <StatCard icon={Activity} label="En ligne" value={`${up.length} / ${ps.length}`}>
+                {bad ? <p className="mt-1.5 flex items-center gap-1.5 text-xs text-red-400"><TriangleAlert size={12} /> {bad} à vérifier</p> : <p className="mt-1.5 text-xs text-zinc-500">{up.length === ps.length ? 'Tout fonctionne' : `${ps.length - up.length} arrêté${ps.length - up.length > 1 ? 's' : ''}`}</p>}
+              </StatCard>
+            </div>
+            <StatCard icon={Cpu} label="CPU total" value={stats ? `${cpu.toFixed(1)} %` : '—'} />
+            <StatCard icon={MemoryStick} label="Mémoire" value={stats ? fmtMiB(mem) : '—'} />
+          </div>
+          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {ps.map(p => <ProjectCard key={p.id} p={p} stat={stats?.[p.id]} />)}
+            <a href="#/new" className="group flex min-h-[190px] flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-zinc-800 text-sm text-zinc-500 transition-all duration-300 hover:-translate-y-1 hover:border-accent-blue/50 hover:text-white">
+              <span className="grid h-11 w-11 place-items-center rounded-xl border border-zinc-800 bg-zinc-900/70 transition-colors group-hover:border-accent-blue/50"><Plus size={20} /></span>
+              Nouveau projet
             </a>
-          ))}
-        </div>
+          </div>
+        </>
       )}
     </div>
   )
