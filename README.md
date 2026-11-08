@@ -1,31 +1,37 @@
 # Shipyard
 
 Mini-PaaS auto-hébergé : déploie un repo GitHub ou une image Docker sur ton VPS.
-Pas de proxy intégré : chaque projet est publié sur un port local (4000, 4001…) et tu le branches à ton Caddy.
+Chaque projet est publié sur un port local (4000, 4001…) et **Shipyard gère ton Caddy tout seul** : il écrit les blocs `reverse_proxy` dans ton Caddyfile et recharge Caddy à chaque ajout, changement de domaine ou suppression de projet.
+
+## Prérequis
+
+- Docker sur le VPS
+- Caddy en Docker avec `network_mode: host`, un dossier `~/caddy` qui contient `docker-compose.yml` et `Caddyfile`, et un conteneur nommé `caddy`
+- Un nom DuckDNS (ou un domaine) par site, qui pointe vers l'IP du VPS (les sous-domaines DuckDNS fonctionnent tous)
+- Les ports 80 et 443 ouverts
 
 ## Installation
 
-1. `cp .env.example .env` puis remplis `ADMIN_PASSWORD` et `SESSION_SECRET`.
-2. `docker compose up -d --build`
-3. Ajoute le panel dans ton Caddyfile :
-
+```bash
+cd ~
+git clone https://github.com/Wallacecleaver/Wallace-docker.git shipyard
+cd shipyard
+cp .env.example .env
+nano .env        # ADMIN_PASSWORD, SESSION_SECRET (openssl rand -hex 32), PANEL_DOMAIN
+docker compose up -d --build
 ```
-panel.mondomaine.fr {
-    reverse_proxy localhost:3000
-}
-```
 
-4. `sudo systemctl reload caddy`
+Au démarrage, Shipyard ajoute le domaine du panel (`PANEL_DOMAIN`) dans le Caddyfile et recharge Caddy. Ouvre ensuite `https://ton-panel.duckdns.org`.
+
+Les blocs gérés par Shipyard sont placés entre deux lignes de commentaire à la fin du Caddyfile. Ne les modifie pas à la main : tout ce qui est en dehors (tes réglages globaux, tes blocs perso) est conservé.
+Si le Caddyfile devient invalide (par exemple un domaine déjà déclaré à la main), Shipyard annule la modification, garde l'ancienne config et affiche l'erreur dans l'onglet Paramètres du projet.
 
 ## Ajouter un projet
 
-Dans l'onglet **Paramètres** du projet, le panel affiche le bloc à copier dans ton Caddyfile :
+Dans le panel : nouveau projet, repo GitHub ou image Docker, port interne, domaine. Shipyard build, lance le conteneur sur un port local, ajoute le domaine dans Caddy et recharge.
 
-```
-mon-site.mondomaine.fr {
-    reverse_proxy localhost:4000
-}
-```
+Redéploiement automatique : copie l'URL du webhook (Paramètres) dans GitHub → Settings → Webhooks. Si le nouveau déploiement plante, l'ancienne version est relancée.
 
-Redéploiement automatique : copie l'URL du webhook (Paramètres) dans GitHub → Settings → Webhooks.
-Si le nouveau déploiement plante, l'ancienne version est relancée.
+## Sans gestion automatique de Caddy
+
+Si tu retires la ligne `CADDYFILE` du `docker-compose.yml`, le panel te montre à la place le bloc à copier dans ton Caddyfile (puis `docker exec -w /etc/caddy caddy caddy reload`).

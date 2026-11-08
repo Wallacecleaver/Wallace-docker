@@ -231,9 +231,19 @@ function ProjectPage({ id }) {
           </div>
           <Field label="Domaine"><input className={inp} placeholder="mon-site.mondomaine.fr" value={cfg.domain} onChange={e => setCfg({ ...cfg, domain: e.target.value })} /></Field>
           <button className={btn} onClick={() => save(true).then(() => setTab('deploys'))}>Appliquer & redéployer</button>
-          <Field label="À ajouter dans ton Caddyfile" hint="Puis : sudo systemctl reload caddy">
-            <pre onClick={e => navigator.clipboard?.writeText(e.currentTarget.textContent)} title="Cliquer pour copier" className="cursor-pointer rounded-xl border border-zinc-800 bg-black/60 p-4 font-mono text-xs leading-relaxed text-zinc-300">{`${cfg.domain || 'mon-site.mondomaine.fr'} {\n    reverse_proxy localhost:${p.hostport}\n}`}</pre>
-          </Field>
+          {p.caddy?.enabled
+            ? (
+              <Field label="Caddy" hint="Le Caddyfile est mis à jour et rechargé automatiquement quand tu appliques.">
+                <div className={cx('rounded-xl border p-4 text-xs leading-relaxed', p.caddy.error ? 'border-red-500/40 bg-red-500/10 text-red-300' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300')}>
+                  {p.caddy.error ? <pre className="whitespace-pre-wrap font-mono">{p.caddy.error}</pre> : 'Géré automatiquement ✓'}
+                </div>
+              </Field>
+            )
+            : (
+              <Field label="À ajouter dans ton Caddyfile" hint="Puis : docker exec -w /etc/caddy caddy caddy reload">
+                <pre onClick={e => navigator.clipboard?.writeText(e.currentTarget.textContent)} title="Cliquer pour copier" className="cursor-pointer rounded-xl border border-zinc-800 bg-black/60 p-4 font-mono text-xs leading-relaxed text-zinc-300">{`${cfg.domain || 'mon-site.mondomaine.fr'} {\n    reverse_proxy localhost:${p.hostport}\n}`}</pre>
+              </Field>
+            )}
           {p.source === 'github' && (
             <Field label="Webhook GitHub (push → redéploiement)" hint="Repo → Settings → Webhooks → content type application/json">
               <input readOnly className={cx(inp, 'font-mono text-xs')} value={hook} onFocus={e => e.target.select()} />

@@ -5,8 +5,13 @@ services:
     env_file: .env
     environment:
       DATA_DIR: /data
+      # Gestion automatique de Caddy (Caddy doit tourner en Docker, voir README)
+      CADDYFILE: /caddy/Caddyfile
+      CADDY_CONTAINER: ${CADDY_CONTAINER:-caddy}
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data:/data
+      # Dossier qui contient ton Caddyfile (par défaut ~/caddy si Shipyard est dans ~/shipyard)
+      - ${CADDY_DIR:-../caddy}:/caddy

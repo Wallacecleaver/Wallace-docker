@@ -2,7 +2,7 @@ import http from 'node:http'
 import { DatabaseSync } from 'node:sqlite'
 import { spawn } from 'node:child_process'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createReadStream, existsSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,6 +13,9 @@ const PORT_START = +E.APP_PORT_START || 4000
 const DATA = E.DATA_DIR || './data'
 const TOKEN = E.GITHUB_TOKEN || ''
 const PASS = E.ADMIN_PASSWORD
+const CADDYFILE = E.CADDYFILE || ''
+const CADDY_CTR = E.CADDY_CONTAINER || 'caddy'
+const PANEL_DOMAIN = (E.PANEL_DOMAIN || '').trim().toLowerCase()
 const SECRET = E.SESSION_SECRET || randomBytes(32).toString('hex')
 const WEB = path.join(path.dirname(fileURLToPath(import.meta.url)), '../dist')
 if (!PASS) { console.error('ADMIN_PASSWORD manquant'); process.exit(1) }
@@ -69,6 +72,44 @@ function check(o) {
   if (!o.env || typeof o.env !== 'object') o.env = {}
   for (const k of Object.keys(o.env)) if (!/^[A-Za-z_]\w*$/.test(k)) bad(`Variable invalide : ${k}`)
   return o
+}
+
+// ---------- Caddy (géré automatiquement si CADDYFILE est défini) ----------
+const BEGIN = '# >>> shipyard : bloc géré automatiquement, ne pas modifier >>>'
+const END = '# <<< shipyard <<<'
+const caddy = { enabled: !!CADDYFILE, error: '' }
+if (PANEL_DOMAIN && !DOM.test(PANEL_DOMAIN)) { console.error('PANEL_DOMAIN invalide'); process.exit(1) }
+let caddyQueue = Promise.resolve()
+const syncCaddy = () => caddy.enabled ? (caddyQueue = caddyQueue.then(doSyncCaddy)) : Promise.resolve()
+
+async function doSyncCaddy() {
+  try {
+    const blocks = []
+    if (PANEL_DOMAIN) blocks.push(`${PANEL_DOMAIN} {\n    reverse_proxy localhost:${+E.PORT || 3000}\n}`)
+    for (const r of db.prepare("select domain,hostport from projects where domain != '' order by created").all())
+      blocks.push(`${r.domain} {\n    reverse_proxy localhost:${r.hostport}\n}`)
+    const section = `${BEGIN}\n${blocks.join('\n\n')}${blocks.length ? '\n' : ''}${END}`
+    const cur = existsSync(CADDYFILE) ? await readFile(CADDYFILE, 'utf8') : ''
+    const a = cur.indexOf(BEGIN), b = cur.indexOf(END)
+    const next = a !== -1 && b > a
+      ? cur.slice(0, a) + section + cur.slice(b + END.length)
+      : `${cur.replace(/\s*$/, '')}${cur.trim() ? '\n\n' : ''}${section}\n`
+    if (next === cur) { caddy.error = ''; return }
+    // Écriture sur place (même inode) pour que le bind mount du conteneur Caddy voie le changement
+    await writeFile(CADDYFILE, next)
+    let msg = ''; const onData = d => { msg += d }
+    const cx = sub => ['exec', '-w', '/etc/caddy', CADDY_CTR, 'caddy', sub, '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile']
+    try {
+      await run('docker', cx('validate'), { onData })
+      await run('docker', cx('reload'), { onData })
+    } catch (e) {
+      await writeFile(CADDYFILE, cur)
+      throw new Error(`${e.message}\n${msg.trim().split('\n').slice(-6).join('\n')}`)
+    }
+    caddy.error = ''
+  } catch (e) {
+    caddy.error = e.message; console.error('[caddy]', e.message)
+  }
 }
 
 // ---------- déploiement ----------
@@ -160,6 +201,7 @@ route('POST', '/api/login', ({ req, res, body }) => {
 }, false)
 route('POST', '/api/logout', ({ res }) => { res.setHeader('set-cookie', 'sy=; HttpOnly; Path=/; Max-Age=0') })
 route('GET', '/api/me', () => ({ ok: true }))
+route('GET', '/api/caddy', () => caddy)
 
 route('GET', '/api/projects', async () => {
   const state = {}
@@ -173,7 +215,7 @@ route('GET', '/api/projects', async () => {
   })
 })
 
-route('POST', '/api/projects', ({ body }) => {
+route('POST', '/api/projects', async ({ body }) => {
   const name = String(body.name || '').trim()
   const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 38)
   if (!SLUG.test(id) || ['api'].includes(id)) bad('Nom invalide ou réservé')
@@ -182,23 +224,25 @@ route('POST', '/api/projects', ({ body }) => {
   const hostport = (db.prepare('select max(hostport) m from projects').get().m || PORT_START - 1) + 1
   db.prepare('insert into projects(id,name,source,repo,branch,image,port,domain,env,hook,created,hostport) values(?,?,?,?,?,?,?,?,?,?,?,?)')
     .run(id, name, o.source, o.repo || '', o.branch || '', o.image || '', o.port, o.domain, JSON.stringify(o.env), randomBytes(16).toString('hex'), Date.now(), hostport)
-  start(getP(id)); return { id }
+  await syncCaddy(); start(getP(id)); return { id, caddy: caddy.error || undefined }
 })
 
 route('GET', '/api/projects/:id', async ({ params }) => {
   const p = getP(params.id), c = await ctrs(p.id)
   const state = c[0] ? await out('docker', ['inspect', '-f', '{{.State.Status}}', c[0]]) : 'idle'
   return {
-    ...p, url: urlOf(p), status: deploying.has(p.id) ? 'building' : state,
+    ...p, url: urlOf(p), status: deploying.has(p.id) ? 'building' : state, caddy,
     deploys: db.prepare('select id,status,created,finished from deploys where project=? order by id desc limit 20').all(p.id),
   }
 })
 
-route('PATCH', '/api/projects/:id', ({ params, body }) => {
+route('PATCH', '/api/projects/:id', async ({ params, body }) => {
   const p = getP(params.id), o = check({ ...p, ...body, source: p.source })
   db.prepare('update projects set branch=?,image=?,port=?,domain=?,env=? where id=?')
     .run(o.branch, o.image, o.port, o.domain, JSON.stringify(o.env), p.id)
+  await syncCaddy()
   if (body.redeploy) start(getP(p.id))
+  return { ok: true, caddy: caddy.error || undefined }
 })
 route('POST', '/api/projects/:id/deploy', ({ params }) => { start(getP(params.id)) })
 for (const act of ['stop', 'start'])
@@ -211,6 +255,7 @@ route('DELETE', '/api/projects/:id', async ({ params }) => {
   for (const tag of lines(await out('docker', ['images', `shipyard/${p.id}`, '--format', '{{.Tag}}']))) await out('docker', ['rmi', `shipyard/${p.id}:${tag}`])
   await rm(path.join(DATA, 'src', p.id), { recursive: true, force: true })
   db.prepare('delete from deploys where project=?').run(p.id); db.prepare('delete from projects where id=?').run(p.id)
+  await syncCaddy()
 })
 
 route('GET', '/api/projects/:id/logs', async ({ req, res, params }) => {
@@ -259,6 +304,8 @@ const readBody = req => new Promise((ok, ko) => {
   req.on('data', c => { s += c; if (s.length > 1e6) { ko(Object.assign(new Error('Requête trop grosse'), { status: 413 })); req.destroy() } })
   req.on('end', () => { try { ok(s ? JSON.parse(s) : {}) } catch { ko(Object.assign(new Error('JSON invalide'), { status: 400 })) } })
 })
+
+syncCaddy()
 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x')
