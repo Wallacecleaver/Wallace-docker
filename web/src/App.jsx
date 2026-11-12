@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowDown, ArrowDownUp, ArrowLeft, ArrowUp, Check, ChevronDown, CircleCheck, CircleX, Clock, Container, Copy, Cpu, ExternalLink, GitBranch, Github, Globe, Hash, HeartPulse, History, KeyRound, LoaderCircle, Lock, LogOut, MemoryStick, Play, Plus, RefreshCw, Rocket, Save, Search, Settings, ShieldCheck, Square, Terminal, Trash2, TriangleAlert } from 'lucide-react'
+import { Activity, ArrowDown, ArrowDownUp, ArrowLeft, ArrowUp, Check, ChevronDown, CircleCheck, CircleX, Clock, Container, Copy, Cpu, ExternalLink, GitBranch, Github, Globe, Hash, HeartPulse, History, KeyRound, LoaderCircle, Lock, LogOut, MemoryStick, Play, Plus, RefreshCw, Rocket, Save, Search, Settings, ShieldCheck, Square, SquareTerminal, Terminal, Trash2, TriangleAlert } from 'lucide-react'
 
 // ---------- utils ----------
 const cx = (...a) => a.filter(Boolean).join(' ')
@@ -432,7 +432,94 @@ function NewProject() {
   )
 }
 
-const TABS = [['deploys', History, 'Déploiements'], ['logs', Terminal, 'Logs'], ['env', KeyRound, 'Variables'], ['settings', Settings, 'Paramètres']]
+// Terminal du projet : une commande à la fois dans le conteneur (pas de saisie interactive). Le serveur ajoute en fin de sortie un marqueur avec le code de sortie et le dossier courant.
+const MARK = '\n__WDOCK__'
+function parseRun(raw) {
+  const i = raw.lastIndexOf(MARK)
+  if (i === -1) { // un début de marqueur peut arriver coupé en deux : on ne l'affiche pas
+    for (let n = Math.min(MARK.length - 1, raw.length); n > 0; n--) if (raw.endsWith(MARK.slice(0, n))) return { text: raw.slice(0, -n) }
+    return { text: raw }
+  }
+  const m = /^__WDOCK__(\d+)__(.*)/.exec(raw.slice(i + 1))
+  return { text: raw.slice(0, i), code: m ? +m[1] : undefined, cwd: m ? m[2].trim() : undefined }
+}
+
+function TermView({ id, name, running }) {
+  const [items, setItems] = useState([]), [cmd, setCmd] = useState(''), [cwd, setCwd] = useState(''), [busy, setBusy] = useState(false)
+  const ctl = useRef(null), box = useRef(), field = useRef(), hist = useRef({ list: [], i: -1 })
+  useEffect(() => { if (box.current) box.current.scrollTop = box.current.scrollHeight }, [items])
+  useEffect(() => { if (!busy) field.current?.focus({ preventScroll: true }) }, [busy])
+  useEffect(() => () => ctl.current?.abort(), [])
+  const run = async c => {
+    const ac = new AbortController(); ctl.current = ac; setBusy(true)
+    setItems(l => [...l, { cmd: c, cwd, out: '', busy: true }])
+    const upd = f => setItems(l => l.map((x, i) => i === l.length - 1 ? f(x) : x))
+    let raw = ''
+    try {
+      const r = await fetch(`/api/projects/${id}/exec`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cmd: c, cwd }), signal: ac.signal })
+      if (r.status === 401) { location.reload(); return }
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText)
+      const rd = r.body.getReader(), dec = new TextDecoder()
+      for (;;) {
+        const { done, value } = await rd.read(); if (done) break
+        raw += dec.decode(value, { stream: true }); const v = parseRun(raw)
+        upd(x => ({ ...x, out: v.text.slice(-200000) }))
+      }
+      raw += dec.decode(); const v = parseRun(raw)
+      upd(x => ({ ...x, out: v.text.slice(-200000), code: v.code, busy: false })); if (v.cwd) setCwd(v.cwd)
+    } catch (e) {
+      upd(x => ({ ...x, out: parseRun(raw).text + (e.name === 'AbortError' ? '\n^C' : `\n✗ ${e.message}`), busy: false }))
+    }
+    ctl.current = null; setBusy(false)
+  }
+  const submit = e => {
+    e.preventDefault(); const c = cmd.trim(); if (!c || busy || !running) return
+    setCmd('')
+    if (c === 'clear') { setItems([]); return }
+    hist.current = { list: [c, ...hist.current.list.filter(x => x !== c)].slice(0, 50), i: -1 }
+    run(c)
+  }
+  const onKey = e => {
+    const h = hist.current
+    if (e.key === 'ArrowUp' && h.list.length) { e.preventDefault(); h.i = Math.min(h.i + 1, h.list.length - 1); setCmd(h.list[h.i]) }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); h.i = Math.max(h.i - 1, -1); setCmd(h.i < 0 ? '' : h.list[h.i]) }
+    else if (e.key === 'c' && e.ctrlKey && busy) { e.preventDefault(); ctl.current?.abort() }
+  }
+  const dir = d => d || '~'
+  return (
+    <div className="overflow-hidden rounded-2xl border border-zinc-800 bg-black/60">
+      <div className="flex items-center justify-between gap-3 border-b border-zinc-800/80 bg-zinc-900/60 px-4 py-2.5">
+        <div className="flex min-w-0 items-center gap-3 text-xs text-zinc-400">
+          <span className="flex gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-zinc-700" /><i className="h-2.5 w-2.5 rounded-full bg-zinc-700" /><i className="h-2.5 w-2.5 rounded-full bg-zinc-700" /></span>
+          <span className="truncate font-medium text-zinc-300">Terminal · {name}</span>
+          {busy ? <span className="flex items-center gap-1.5 text-amber-300"><i className="pulse-dot h-1.5 w-1.5 rounded-full bg-amber-400" />en cours</span>
+            : running ? <span className="text-emerald-400">prêt</span> : <span className="text-zinc-600">conteneur arrêté</span>}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {busy && <button type="button" onClick={() => ctl.current?.abort()} className="inline-flex items-center gap-1.5 rounded-lg border border-red-900/60 px-2.5 py-1.5 text-xs text-red-400 transition-colors hover:bg-red-950/40"><Square size={12} /> Interrompre</button>}
+          <button type="button" onClick={() => setItems([])} className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs text-zinc-400 transition-colors hover:border-zinc-600 hover:text-white">Effacer</button>
+        </div>
+      </div>
+      <div ref={box} onClick={() => { if (!getSelection()?.toString()) field.current?.focus() }} className="h-[32rem] overflow-auto p-4 font-mono text-xs leading-relaxed">
+        {!items.length && <p className="mb-3 text-zinc-600">{running ? 'Tape une commande (ex. ls, cat package.json, env). Une commande à la fois, sans saisie interactive ; ↑ ↓ pour l’historique.' : 'Le conteneur est arrêté : démarre-le pour utiliser le terminal.'}</p>}
+        {items.map((x, i) => (
+          <div key={i} className="mb-3">
+            <div className="break-all text-accent-blue"><span className="select-none text-zinc-500">{dir(x.cwd)} $ </span>{x.cmd}</div>
+            {x.out.replace(/\n$/, '') && <pre className="whitespace-pre-wrap break-all font-mono text-zinc-300">{x.out.replace(/\n$/, '')}</pre>}
+            {x.busy ? <div className="text-zinc-600">…</div> : x.code ? <div className="text-red-400">code de sortie {x.code}</div> : null}
+          </div>
+        ))}
+        <form onSubmit={submit} className="flex items-center gap-2">
+          <span className="shrink-0 select-none text-zinc-500">{dir(cwd)} $</span>
+          <input ref={field} value={cmd} onChange={e => setCmd(e.target.value)} onKeyDown={onKey} readOnly={busy || !running} autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false}
+            className="min-w-0 flex-1 bg-transparent font-mono text-xs text-white outline-none" aria-label="Commande" />
+        </form>
+      </div>
+    </div>
+  )
+}
+
+const TABS = [['deploys', History, 'Déploiements'], ['logs', Terminal, 'Logs'], ['terminal', SquareTerminal, 'Terminal'], ['env', KeyRound, 'Variables'], ['settings', Settings, 'Paramètres']]
 const span = ms => { const s = Math.max(0, Math.round(ms / 1000)), d = (s / 86400) | 0, h = ((s % 86400) / 3600) | 0, m = ((s % 3600) / 60) | 0; return d ? `${d}j ${h}h` : h ? `${h}h ${m}m` : m ? `${m}m ${s % 60}s` : `${s}s` }
 
 function useStats(id) {
@@ -503,6 +590,7 @@ function ProjectPage({ id }) {
   const conf = useConfig(), [stats, hist] = useStats(id)
   const [p, reload] = usePoll(`/projects/${id}`, 3000)
   const [tab, setTab] = useState('deploys'), [sel, setSel] = useState(null), [env, setEnv] = useState(null), [base, setBase] = useState(''), [cfg, setCfg] = useState(null), [msg, setMsg] = useState('')
+  const [syncing, setSyncing] = useState(false), [syncMsg, setSyncMsg] = useState('')
   const [, tick] = useState(0)
   useEffect(() => { const t = setInterval(() => tick(n => n + 1), 1000); return () => clearInterval(t) }, [])
   useEffect(() => { if (p && env === null) { const e = envToText(p.env); setEnv(e); setBase(e); setCfg({ port: p.port, branch: p.branch, domain: p.domain }) } }, [p, env])
@@ -512,6 +600,18 @@ function ProjectPage({ id }) {
   const hook = `${location.origin}/api/hooks/${id}/${p.hook}`
   const save = async redeploy => { const ok = await act('', { method: 'PATCH', body: { ...cfg, env: textToEnv(env), redeploy } }); if (ok) setBase(env); return ok }
   const nVars = Object.keys(textToEnv(env)).length, dirty = env !== base
+  // Ajoute à la liste les variables du .env.example du repo qui n'y sont pas encore (celles déjà présentes ne sont jamais touchées)
+  const syncEnv = async () => {
+    setSyncing(true); setSyncMsg('')
+    try {
+      const r = await api(`/github/env?repo=${encodeURIComponent(p.repo)}&branch=${encodeURIComponent(cfg.branch || p.branch || '')}`)
+      if (!r.file) return setSyncMsg('Aucun fichier .env.example (ou .env.sample…) trouvé à la racine du repo. Pour un repo privé, connecte GitHub dans « Nouveau projet ».')
+      const ex = textToEnv(r.text), have = textToEnv(env), added = Object.keys(ex).filter(k => k !== 'PORT' && !(k in have))
+      if (!added.length) return setSyncMsg(`Rien à ajouter : toutes les variables de ${r.file} sont déjà dans ta liste.`)
+      setEnv(e => e.replace(/\s*$/, '') + (e.trim() ? '\n' : '') + added.map(k => `${k}=${ex[k]}`).join('\n'))
+      setSyncMsg(`${added.length} variable${added.length > 1 ? 's' : ''} ajoutée${added.length > 1 ? 's' : ''} depuis ${r.file} : ${added.join(', ')}. Remplace les valeurs d’exemple par les tiennes, puis enregistre.`)
+    } catch (x) { setSyncMsg(x.message) } finally { setSyncing(false) }
+  }
   const run = stats?.running, last = p.deploys[0], firstOk = p.deploys.find(d => d.status === 'success')?.id
   const memPct = Math.min(100, stats?.memPct || 0)
 
@@ -599,6 +699,7 @@ function ProjectPage({ id }) {
         </div>
       )}
       {tab === 'logs' && <LogView url={`/projects/${id}/logs`} h="h-[32rem]" title={`Logs du conteneur · ${p.name}`} />}
+      <div className={tab === 'terminal' ? '' : 'hidden'}><TermView id={id} name={p.name} running={p.status === 'running'} /></div>
       {tab === 'env' && (
         <div className="max-w-3xl">
           <Card title="Variables d’environnement" desc="Une par ligne : CLE=valeur. Elles sont transmises au conteneur ; le port (PORT) est ajouté automatiquement. Un redéploiement est nécessaire pour les appliquer.">
@@ -606,8 +707,10 @@ function ProjectPage({ id }) {
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <button className={btn} disabled={!dirty} onClick={() => save(false)}><Save size={14} /> Enregistrer</button>
               <button className={btnPrimary} onClick={() => save(true).then(ok => ok && setTab('deploys'))}><Rocket size={15} /> Enregistrer & redéployer</button>
+              {p.source === 'github' && <button className={btn} disabled={syncing} onClick={syncEnv} title="Ajoute les variables du .env.example du repo qui ne sont pas encore dans ta liste"><RefreshCw size={14} className={syncing ? 'animate-spin' : ''} /> Synchroniser avec .env.example</button>}
               {dirty && <span className="flex items-center gap-1.5 text-xs text-amber-300"><i className="pulse-dot h-1.5 w-1.5 rounded-full bg-amber-400" />modifications non enregistrées</span>}
             </div>
+            {syncMsg && <p className="mt-3 text-xs leading-relaxed text-zinc-400">{syncMsg}</p>}
           </Card>
         </div>
       )}

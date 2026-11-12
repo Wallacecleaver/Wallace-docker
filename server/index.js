@@ -405,6 +405,38 @@ route('GET', '/api/projects/:id/logs', async ({ req, res, params }) => {
   const p = spawn('docker', ['logs', '-f', '--tail', '300', '-t', c]), f = d => res.write(ev(d.toString()))
   p.stdout.on('data', f); p.stderr.on('data', f); req.on('close', () => p.kill()); return STREAM
 })
+// Terminal du projet : exécute une commande dans le conteneur en cours (docker exec), sortie renvoyée au fur et à mesure.
+// Pas de TTY ni de saisie interactive (vim, top, mots de passe…) : une commande à la fois. Le dossier courant est suivi d'une commande à l'autre (cd).
+const EXEC_TIMEOUT = (+E.EXEC_TIMEOUT || 120) * 1000, EXEC_MAX = 1e6, execRuns = new Map()
+// (le trap affiche le code de sortie et le dossier courant même si la commande contient « exit »)
+const EXEC_SCRIPT = 'trap \'rc=$?; printf "\\n__WDOCK__%s__%s\\n" "$rc" "$(pwd)"\' EXIT; cd "$WDOCK_CWD" 2>/dev/null || cd; eval "$WDOCK_CMD"'
+// Arrête ce qu'une commande a lancé dans le conteneur (tuer le client docker ne suffit pas) : on retrouve ses processus grâce à la variable WDOCK_RUN
+const killRun = (ctr, tag) => out('docker', ['exec', ctr, 'sh', '-c', 'for p in /proc/[0-9]*; do grep -qa "WDOCK_RUN=$0" "$p/environ" 2>/dev/null && kill -9 "${p#/proc/}" 2>/dev/null; done; true', tag])
+route('POST', '/api/projects/:id/exec', async ({ req, res, params, body }) => {
+  const p = getP(params.id)
+  const cmd = String(body.cmd ?? ''); if (!cmd.trim()) bad('Commande vide'); if (cmd.length > 4000) bad('Commande trop longue')
+  const cwd = String(body.cwd || ''); if (cwd && !/^\/[\w@%+=:,./ -]{0,300}$/.test(cwd)) bad('Dossier invalide')
+  const [ctr] = lines(await out('docker', ['ps', '--filter', `label=shipyard.project=${p.id}`, '--filter', 'status=running', '--format', '{{.Names}}']))
+  if (!ctr) bad('Le conteneur ne tourne pas : démarre-le avant d’utiliser le terminal', 409)
+  if ((execRuns.get(p.id) || 0) >= 3) bad('Déjà 3 commandes en cours sur ce projet', 429)
+  execRuns.set(p.id, (execRuns.get(p.id) || 0) + 1)
+  const tag = randomBytes(8).toString('hex')
+  res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-cache', 'x-accel-buffering': 'no' })
+  const child = spawn('docker', ['exec', '-e', `WDOCK_CMD=${cmd}`, '-e', `WDOCK_CWD=${cwd}`, '-e', `WDOCK_RUN=${tag}`, ctr, 'sh', '-c', EXEC_SCRIPT])
+  let size = 0, over = false, finished = false
+  const stop = why => { if (finished) return; finished = true; clearTimeout(timer); child.kill(); killRun(ctr, tag); if (why && !res.writableEnded) { res.write(`\n${why}\n`); res.end() } }
+  const timer = setTimeout(() => stop(`✗ Commande arrêtée : plus de ${EXEC_TIMEOUT / 1000} s.`), EXEC_TIMEOUT)
+  const f = d => {
+    size += d.length
+    if (size > EXEC_MAX) { if (!over) { over = true; stop('✗ Commande arrêtée : trop de sortie (plus de 1 Mo).') } return }
+    if (!res.writableEnded) res.write(d)
+  }
+  child.stdout.on('data', f); child.stderr.on('data', f)
+  child.on('error', e => { if (!finished) { finished = true; clearTimeout(timer); if (!res.writableEnded) { res.write(`\n✗ ${e.message}\n`); res.end() } } })
+  child.on('close', () => { finished = true; clearTimeout(timer); if (!res.writableEnded) res.end() })
+  res.on('close', () => { execRuns.set(p.id, Math.max(0, (execRuns.get(p.id) || 1) - 1)); if (!finished) stop() }) // navigateur fermé ou bouton « Interrompre »
+  return STREAM
+})
 route('GET', '/api/deploys/:id/log', ({ req, res, params }) => {
   sse(res); const b = logs.get(+params.id)
   if (b) { res.write(ev(b.text)); b.subs.add(res); req.on('close', () => b.subs.delete(res)) }

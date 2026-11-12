@@ -48,6 +48,16 @@ Redéploiement automatique : copie l'URL du webhook (Paramètres) dans GitHub �
 Si l'image définit un `HEALTHCHECK`, WDock attend qu'il soit « sain » avant d'annoncer « En ligne » : s'il échoue, la raison s'affiche dans les logs du déploiement et l'ancienne version est remise (délai réglable avec `HEALTH_TIMEOUT`).
 Un push reçu pendant un déploiement n'est pas perdu : il déclenche un redéploiement dès que le premier est fini. Le message de test (`ping`) de GitHub est ignoré.
 
+## Terminal du projet
+
+L'onglet **Terminal** d'un projet lance des commandes dans son conteneur (`docker exec`) : `ls`, `cat package.json`, `env`, `node -v`… La sortie arrive au fur et à mesure, `cd` est conservé d'une commande à l'autre, ↑ ↓ rappellent l'historique, **Interrompre** (ou Ctrl+C) arrête la commande en cours.
+Limites : une commande à la fois, pas de saisie interactive (`vim`, `top`, mot de passe demandé…), 3 commandes en parallèle au maximum, arrêt automatique après 120 s (réglable avec `EXEC_TIMEOUT`, en secondes) ou 1 Mo de sortie. Le conteneur doit tourner et contenir un `sh`.
+Ce terminal donne le même pouvoir que le panel : garde un `ADMIN_PASSWORD` solide.
+
+## Synchroniser les variables avec le .env.example
+
+Dans l'onglet **Variables** d'un projet GitHub, le bouton **Synchroniser avec .env.example** lit le `.env.example` (ou `.env.sample`…) du repo et **ajoute à la liste les variables qui n'y sont pas encore**. Celles que tu as déjà ne sont jamais modifiées, `PORT` est ignoré (il est ajouté automatiquement). Les lignes ajoutées reprennent les valeurs d'exemple : remplace-les, puis enregistre. Les variables commentées (`#NOM=…`) ne sont pas ajoutées.
+
 ## Sans gestion automatique de Caddy
 
 Si tu retires la ligne `CADDYFILE` du `docker-compose.yml`, le panel te montre à la place le bloc à copier dans ton Caddyfile (puis `docker exec -w /etc/caddy caddy caddy reload`).
